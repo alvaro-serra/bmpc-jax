@@ -18,7 +18,7 @@ from tensorflow_probability.substrates.jax import distributions as tfd
 
 class BMPC(struct.PyTreeNode):
   model: WorldModel
-  scale: jax.Array
+  kl_scale: jax.Array
 
   # Planning
   mpc: bool
@@ -29,6 +29,7 @@ class BMPC(struct.PyTreeNode):
   num_elites: int = struct.field(pytree_node=False)
   min_plan_std: float
   max_plan_std: float
+  temperature: float
 
   # Optimization
   batch_size: int = struct.field(pytree_node=False)
@@ -53,6 +54,7 @@ class BMPC(struct.PyTreeNode):
              num_elites: int,
              min_plan_std: float,
              max_plan_std: float,
+             temperature: float,
              # Optimization
              discount: float,
              batch_size: int,
@@ -74,6 +76,7 @@ class BMPC(struct.PyTreeNode):
                num_elites=num_elites,
                min_plan_std=min_plan_std,
                max_plan_std=max_plan_std,
+               temperature=temperature,
                discount=discount,
                batch_size=batch_size,
                rho=rho,
@@ -83,7 +86,7 @@ class BMPC(struct.PyTreeNode):
                continue_coef=continue_coef,
                entropy_coef=entropy_coef,
                tau=tau,
-               scale=jnp.array([1.0]),
+               kl_scale=jnp.array([1.0]),
                )
 
   def act(self,
@@ -148,7 +151,9 @@ class BMPC(struct.PyTreeNode):
       for t in range(horizon):
         policy_actions = policy_actions.at[..., t, :].set(
             self.model.sample_actions(
-                z_t, self.model.policy_model.params, key=prior_noise_keys[t]
+                z=z_t,
+                params=self.model.policy_model.params,
+                key=prior_noise_keys[t]
             )[0]
         )
         if t < horizon-1:  # Don't need for the last time step
@@ -202,7 +207,7 @@ class BMPC(struct.PyTreeNode):
       )
 
       # Update population distribution
-      score = jax.nn.softmax(elite_values)
+      score = jax.nn.softmax(self.temperature * elite_values)
       mean = jnp.sum(score[..., None, None] * elite_actions, axis=-3)
       std = jnp.sqrt(
           jnp.sum(
@@ -213,15 +218,23 @@ class BMPC(struct.PyTreeNode):
       ).clip(self.min_plan_std, self.max_plan_std)
 
     # Select final action
+    # Select final action using Gumbel sampling
+    key, gumbel_key = jax.random.split(key)
+    gumbels = jax.random.gumbel(gumbel_key, shape=elite_values.shape)
+    gumbel_scores = jnp.log(score) + gumbels
+    action_ind = jnp.argmax(gumbel_scores, axis=-1)
+    action = jnp.take_along_axis(
+        elite_actions, action_ind[..., None, None, None], axis=-3
+    )[..., 0, :, :]
+
     if deterministic:
-      action = mean[..., 0, :]
+      final_action = action[..., 0, :]
     else:
       key, final_noise_key = jax.random.split(key)
-      action = mean[..., 0, :] + std[..., 0, :] * jax.random.normal(
+      final_action = action[..., 0, :] + std[..., 0, :] * jax.random.normal(
           final_noise_key, shape=batch_shape + (self.model.action_dim,)
       )
-
-    return action.clip(-1, 1), (mean, std)
+    return final_action.clip(-1, 1), (mean, std, action)
 
   @partial(jax.jit, static_argnames=('horizon'))
   def estimate_value(self,
@@ -459,7 +472,7 @@ class BMPC(struct.PyTreeNode):
                     key: PRNGKeyArray
                     ):
     def policy_loss_fn(actor_params: flax.core.FrozenDict):
-      _, mean, log_std, log_probs = self.model.sample_actions(
+      actions, mean, log_std, log_probs = self.model.sample_actions(
           zs, actor_params, key=key
       )
 
@@ -467,18 +480,18 @@ class BMPC(struct.PyTreeNode):
       action_dist = tfd.MultivariateNormalDiag(mean, jnp.exp(log_std))
       expert_dist = tfd.MultivariateNormalDiag(expert_mean, expert_std)
       kl_div = tfd.kl_divergence(action_dist, expert_dist)
-      policy_scale = percentile_normalization(
-          kl_div.mean(axis=0), self.scale
+      kl_scale = percentile_normalization(
+          kl_div.mean(axis=0), self.kl_scale
       ).clip(1, None)
 
+
       policy_loss = jnp.mean(
-          bmpc_scale *
-          (self.entropy_coef * log_probs + kl_div / sg(policy_scale)),
+          bmpc_scale * (kl_div / sg(kl_scale) + self.entropy_coef * log_probs)
       )
 
       return policy_loss, {
           'policy_loss': policy_loss,
-          'policy_scale': policy_scale,
+          'kl_scale': kl_scale,
           'entropy': -log_probs.mean()
       }
 
@@ -489,6 +502,6 @@ class BMPC(struct.PyTreeNode):
 
     new_agent = self.replace(
         model=self.model.replace(policy_model=new_policy),
-        scale=policy_info['policy_scale']
+        kl_scale=policy_info['kl_scale'],
     )
     return new_agent, policy_info
