@@ -66,4 +66,5 @@ bmpc:
   reanalyze_interval: 10
   reanalyze_batch_size: 20
   reanalyze_horizon: 3
-  discount: 1.0
+  discount: 0.995
+  min_actor_std: 0.01
