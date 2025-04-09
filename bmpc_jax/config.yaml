@@ -7,8 +7,8 @@ hydra:
 seed: 0
 max_steps: 2_000_000
 buffer_size: 2_000_000
-save_interval_steps: 100000
-log_interval_steps: 10000
+save_interval_steps: 100_000
+log_interval_steps: 10_000
 
 env:
   backend: dmc
@@ -28,7 +28,7 @@ encoder:
 world_model:
   latent_dim: 512
   value_dropout: 0.01
-  num_value_nets: 2
+  num_value_nets: 5
   num_bins: 101
   symlog_min: -10
   symlog_max: 10
@@ -67,4 +67,4 @@ bmpc:
   reanalyze_batch_size: 20
   reanalyze_horizon: 3
   discount: 0.995
-  min_actor_std: 0.01
+  min_policy_std: 0.01

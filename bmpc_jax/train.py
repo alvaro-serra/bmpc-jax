@@ -334,7 +334,9 @@ def train(cfg: dict):
             agent, policy_info = agent.update_policy(
                 zs=true_zs,
                 expert_mean=batch['expert_mean'],
-                expert_std=batch['expert_std'],
+                expert_std=batch['expert_std'].clip(
+                    bmpc_config.min_policy_std, None
+                ),
                 bmpc_scale=bmpc_scale,
                 key=policy_key
             )
