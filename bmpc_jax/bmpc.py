@@ -218,7 +218,6 @@ class BMPC(struct.PyTreeNode):
       ).clip(self.min_plan_std, self.max_plan_std)
 
     # Select final action
-    # Select final action using Gumbel sampling
     key, gumbel_key = jax.random.split(key)
     gumbels = jax.random.gumbel(gumbel_key, shape=elite_values.shape)
     gumbel_scores = jnp.log(score) + gumbels

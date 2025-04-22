@@ -72,8 +72,11 @@ class WorldModel(struct.PyTreeNode):
     dynamics_module = nn.Sequential([
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
-        NormedLinear(latent_dim, activation=partial(
-            simnorm, simplex_dim=simnorm_dim), dtype=dtype)
+        NormedLinear(
+            latent_dim,
+            activation=partial(simnorm, simplex_dim=simnorm_dim),
+            dtype=dtype
+        )
     ])
     dynamics_model = TrainState.create(
         apply_fn=dynamics_module.apply,
@@ -90,7 +93,9 @@ class WorldModel(struct.PyTreeNode):
     reward_module = nn.Sequential([
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
-        nn.Dense(num_bins, kernel_init=nn.initializers.zeros)
+        nn.Dense(
+            num_bins, kernel_init=nn.initializers.zeros, dtype=dtype
+        )
     ])
     reward_model = TrainState.create(
         apply_fn=reward_module.apply,
@@ -107,8 +112,11 @@ class WorldModel(struct.PyTreeNode):
     policy_module = nn.Sequential([
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
-        nn.Dense(2*action_dim,
-                 kernel_init=nn.initializers.truncated_normal(0.02))
+        nn.Dense(
+            2*action_dim,
+            kernel_init=nn.initializers.truncated_normal(0.02),
+            dtype=dtype
+        )
     ])
     policy_model = TrainState.create(
         apply_fn=policy_module.apply,
@@ -126,7 +134,9 @@ class WorldModel(struct.PyTreeNode):
         NormedLinear(latent_dim, activation=mish,
                      dropout_rate=value_dropout, dtype=dtype),
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
-        nn.Dense(num_bins, kernel_init=nn.initializers.zeros)
+        nn.Dense(
+            num_bins, kernel_init=nn.initializers.zeros, dtype=dtype
+        )
     ])
     value_ensemble = Ensemble(value_base, num=num_value_nets)
     value_model = TrainState.create(
@@ -149,7 +159,7 @@ class WorldModel(struct.PyTreeNode):
       continue_module = nn.Sequential([
           NormedLinear(latent_dim, activation=mish, dtype=dtype),
           NormedLinear(latent_dim, activation=mish, dtype=dtype),
-          nn.Dense(1, kernel_init=nn.initializers.zeros)
+          nn.Dense(1, kernel_init=nn.initializers.zeros, dtype=dtype)
       ])
       continue_model = TrainState.create(
           apply_fn=continue_module.apply,
