@@ -198,9 +198,7 @@ class BMPC(struct.PyTreeNode):
       ).clip(-1, 1)
 
       # Compute elites
-      values = symlog(
-          self.estimate_value(z_t, actions, horizon, key=value_keys[i])
-      )
+      values = self.estimate_value(z_t, actions, horizon, key=value_keys[i])
       elite_values, elite_inds = jax.lax.top_k(values, self.num_elites)
       elite_actions = jnp.take_along_axis(
           actions, elite_inds[..., None, None], axis=-3
@@ -224,7 +222,7 @@ class BMPC(struct.PyTreeNode):
     action_ind = jnp.argmax(gumbel_scores, axis=-1)
     action = jnp.take_along_axis(
         elite_actions, action_ind[..., None, None, None], axis=-3
-    )[..., 0, :, :]
+    ).squeeze(-3)
 
     if deterministic:
       final_action = action[..., 0, :]
@@ -233,7 +231,7 @@ class BMPC(struct.PyTreeNode):
       final_action = action[..., 0, :] + std[..., 0, :] * jax.random.normal(
           final_noise_key, shape=batch_shape + (self.model.action_dim,)
       )
-    return final_action.clip(-1, 1), (mean, std, action)
+    return final_action.clip(-1, 1), (mean, std)
 
   @partial(jax.jit, static_argnames=('horizon'))
   def estimate_value(self,
@@ -482,7 +480,6 @@ class BMPC(struct.PyTreeNode):
       kl_scale = percentile_normalization(
           kl_div.mean(axis=0), self.kl_scale
       ).clip(1, None)
-
 
       policy_loss = jnp.mean(
           bmpc_scale * (kl_div / sg(kl_scale) + self.entropy_coef * log_probs)

@@ -224,8 +224,7 @@ def train(cfg: dict):
         action, plan = agent.act(
             observation, prev_plan=plan, deterministic=False, key=action_key
         )
-        expert_mean = plan[2][..., 0, :]
-        expert_std = plan[1][..., 0, :]
+        expert_mean, expert_std = plan[0][..., 0, :], plan[1][..., 0, :]
 
       next_observation, reward, terminated, truncated, info = env.step(action)
 
