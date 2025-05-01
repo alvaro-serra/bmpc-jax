@@ -122,7 +122,8 @@ def train(cfg: dict):
       dummy_action
   )
   replay_buffer = SequentialReplayBuffer(
-      capacity=cfg.max_steps//env_config.num_envs,
+      capacity=cfg.buffer_size,
+      vectorized=True,
       num_envs=env_config.num_envs,
       seed=cfg.seed,
       dummy_input=dict(
@@ -215,14 +216,15 @@ def train(cfg: dict):
     for global_step in range(global_step, cfg.max_steps, env_config.num_envs):
       if global_step <= seed_steps:
         action = env.action_space.sample()
-        expert_mean, expert_std = action, np.ones_like(action)
+        expert_mean, expert_std = np.zeros_like(action), np.full_like(
+            action, tdmpc_config.max_plan_std
+        )
       else:
         rng, action_key = jax.random.split(rng)
         action, plan = agent.act(
             observation, prev_plan=plan, deterministic=False, key=action_key
         )
-        expert_mean = plan[0][..., 0, :]
-        expert_std = plan[1][..., 0, :]
+        expert_mean, expert_std = plan[0][..., 0, :], plan[1][..., 0, :]
 
       next_observation, reward, terminated, truncated, info = env.step(action)
 
@@ -237,7 +239,9 @@ def train(cfg: dict):
                 truncated=truncated,
                 expert_mean=expert_mean,
                 expert_std=expert_std,
-                last_reanalyze=np.zeros(env_config.num_envs, dtype=int),
+                last_reanalyze=np.full(
+                    env_config.num_envs, total_reanalyze_steps, dtype=int
+                ),
             ),
             env_mask=~done
         )
@@ -279,8 +283,8 @@ def train(cfg: dict):
           prev_logged_step = global_step
 
         for iupdate in range(num_updates):
-          batch, batch_env_inds, batch_seq_inds = replay_buffer.sample(
-              agent.batch_size, agent.horizon
+          batch, batch_inds = replay_buffer.sample(
+              agent.batch_size, agent.horizon, return_inds=True
           )
           agent, train_info = agent.update_world_model(
               observations=batch['observation'],
@@ -295,6 +299,7 @@ def train(cfg: dict):
 
           # Reanalyze
           true_zs = train_info.pop('true_zs')
+          zs = train_info.pop('zs')
           if total_num_updates % bmpc_config.reanalyze_interval == 0:
             total_reanalyze_steps += 1
             rng, reanalyze_key = jax.random.split(rng)
@@ -310,29 +315,28 @@ def train(cfg: dict):
             reanalyze_std = reanalyzed_plan[1][..., 0, :]
             # Update expert policy in buffer
             # Reshape for buffer: (T, B, A) -> (B, T, A)
-            env_inds = batch_env_inds[:b, None]
-            seq_inds = batch_seq_inds[:b]
+            env_inds = batch_inds[0][:b, None]
+            seq_inds = batch_inds[1][:b]
             replay_buffer.data['expert_mean'][seq_inds, env_inds] = \
                 np.swapaxes(reanalyze_mean, 0, 1)
             replay_buffer.data['expert_std'][seq_inds, env_inds] = \
                 np.swapaxes(reanalyze_std, 0, 1)
             replay_buffer.data['last_reanalyze'][seq_inds, env_inds] = \
                 total_reanalyze_steps
-
             batch['expert_mean'][:, :b, :] = reanalyze_mean
             batch['expert_std'][:, :b, :] = reanalyze_std
 
           # Update policy with reanalyzed samples
-          if not pretrain and \
-                  total_num_updates % bmpc_config.policy_update_interval == 0:
-
+          if not pretrain:
             reanalyze_age = total_reanalyze_steps - batch['last_reanalyze']
             bmpc_scale = bmpc_config.discount**reanalyze_age
             rng, policy_key = jax.random.split(rng)
             agent, policy_info = agent.update_policy(
-                zs=true_zs,
+                zs=zs[:-1],
                 expert_mean=batch['expert_mean'],
-                expert_std=batch['expert_std'],
+                expert_std=batch['expert_std'].clip(
+                    bmpc_config.min_policy_std, None
+                ),
                 bmpc_scale=bmpc_scale,
                 key=policy_key
             )

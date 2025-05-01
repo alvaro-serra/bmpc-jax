@@ -1,6 +1,6 @@
 import copy
 from functools import partial
-from typing import Dict, Tuple, Callable
+from typing import *
 import flax.linen as nn
 from flax.training.train_state import TrainState
 from flax import struct
@@ -65,8 +65,8 @@ class WorldModel(struct.PyTreeNode):
              *,
              key: PRNGKeyArray,
              ):
-    dynamics_key, reward_key, value_key, policy_key, continue_key = \
-        jax.random.split(key, 5)
+    dynamics_key, reward_key, value_key, policy_key, continue_key = jax.random.split(
+        key, 5)
 
     # Latent forward dynamics model
     dynamics_module = nn.Sequential([
@@ -93,13 +93,14 @@ class WorldModel(struct.PyTreeNode):
     reward_module = nn.Sequential([
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
-        nn.Dense(num_bins, kernel_init=nn.initializers.zeros)
+        nn.Dense(
+            num_bins, kernel_init=nn.initializers.zeros, dtype=dtype
+        )
     ])
     reward_model = TrainState.create(
         apply_fn=reward_module.apply,
         params=reward_module.init(
-            reward_key, jnp.zeros(latent_dim + action_dim)
-        )['params'],
+            reward_key, jnp.zeros(latent_dim + action_dim))['params'],
         tx=optax.chain(
             optax.zero_nans(),
             optax.clip_by_global_norm(max_grad_norm),
@@ -112,7 +113,9 @@ class WorldModel(struct.PyTreeNode):
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
         nn.Dense(
-            2*action_dim, kernel_init=nn.initializers.truncated_normal(0.02)
+            2*action_dim,
+            kernel_init=nn.initializers.truncated_normal(0.02),
+            dtype=dtype
         )
     ])
     policy_model = TrainState.create(
@@ -128,27 +131,19 @@ class WorldModel(struct.PyTreeNode):
     # Return/value model (ensemble)
     value_param_key, value_dropout_key = jax.random.split(value_key)
     value_base = partial(nn.Sequential, [
-        NormedLinear(
-            latent_dim,
-            activation=mish,
-            dropout_rate=value_dropout,
-            dtype=dtype
-        ),
-        NormedLinear(
-            latent_dim,
-            activation=mish,
-            dropout_rate=value_dropout,
-            dtype=dtype
-        ),
-        nn.Dense(num_bins, kernel_init=nn.initializers.zeros)
+        NormedLinear(latent_dim, activation=mish,
+                     dropout_rate=value_dropout, dtype=dtype),
+        NormedLinear(latent_dim, activation=mish, dtype=dtype),
+        nn.Dense(
+            num_bins, kernel_init=nn.initializers.zeros, dtype=dtype
+        )
     ])
     value_ensemble = Ensemble(value_base, num=num_value_nets)
     value_model = TrainState.create(
         apply_fn=value_ensemble.apply,
         params=value_ensemble.init(
             {'params': value_param_key, 'dropout': value_dropout_key},
-            jnp.zeros(latent_dim)
-        )['params'],
+            jnp.zeros(latent_dim))['params'],
         tx=optax.chain(
             optax.zero_nans(),
             optax.clip_by_global_norm(max_grad_norm),
@@ -164,13 +159,12 @@ class WorldModel(struct.PyTreeNode):
       continue_module = nn.Sequential([
           NormedLinear(latent_dim, activation=mish, dtype=dtype),
           NormedLinear(latent_dim, activation=mish, dtype=dtype),
-          nn.Dense(1, kernel_init=nn.initializers.zeros)
+          nn.Dense(1, kernel_init=nn.initializers.zeros, dtype=dtype)
       ])
       continue_model = TrainState.create(
           apply_fn=continue_module.apply,
           params=continue_module.init(
-              continue_key, jnp.zeros(latent_dim)
-          )['params'],
+              continue_key, jnp.zeros(latent_dim))['params'],
           tx=optax.chain(
               optax.zero_nans(),
               optax.clip_by_global_norm(max_grad_norm),
@@ -275,7 +269,7 @@ class WorldModel(struct.PyTreeNode):
   def sample_actions(self,
                      z: jax.Array,
                      params: Dict,
-                     min_log_std: float = -3,
+                     min_log_std: float = -5,
                      max_log_std: float = 1,
                      *,
                      key: PRNGKeyArray
@@ -287,9 +281,10 @@ class WorldModel(struct.PyTreeNode):
     mean = jnp.tanh(mean)
     log_std = min_log_std + (max_log_std - min_log_std) * \
         0.5 * (jnp.tanh(log_std) + 1)
+    std = jnp.exp(log_std)
 
     # Sample action and compute logprobs
-    dist = tfd.MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
+    dist = tfd.MultivariateNormalDiag(loc=mean, scale_diag=std)
     action = dist.sample(seed=key)
     log_probs = dist.log_prob(action)
 
