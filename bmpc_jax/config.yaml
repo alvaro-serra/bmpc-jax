@@ -28,7 +28,7 @@ encoder:
 world_model:
   latent_dim: 512
   value_dropout: 0.01
-  num_value_nets: 2
+  num_value_nets: 5
   num_bins: 101
   symlog_min: -10
   symlog_max: 10
@@ -67,4 +67,4 @@ bmpc:
   reanalyze_batch_size: 20
   reanalyze_horizon: 3
   discount: 1.0
-  min_policy_std: 0.05
+  min_policy_std: 0.10

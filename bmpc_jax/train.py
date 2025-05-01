@@ -299,6 +299,7 @@ def train(cfg: dict):
 
           # Reanalyze
           true_zs = train_info.pop('true_zs')
+          zs = train_info.pop('zs')
           if total_num_updates % bmpc_config.reanalyze_interval == 0:
             total_reanalyze_steps += 1
             rng, reanalyze_key = jax.random.split(rng)
@@ -331,7 +332,7 @@ def train(cfg: dict):
             bmpc_scale = bmpc_config.discount**reanalyze_age
             rng, policy_key = jax.random.split(rng)
             agent, policy_info = agent.update_policy(
-                zs=true_zs,
+                zs=zs[:-1],
                 expert_mean=batch['expert_mean'],
                 expert_std=batch['expert_std'].clip(
                     bmpc_config.min_policy_std, None

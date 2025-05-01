@@ -371,7 +371,8 @@ class BMPC(struct.PyTreeNode):
           'value_loss': value_loss,
           'continue_loss': continue_loss,
           'total_loss': total_loss,
-          'true_zs': true_zs
+          'true_zs': true_zs,
+          'zs': zs
       }
 
     # Update world model
@@ -469,7 +470,7 @@ class BMPC(struct.PyTreeNode):
                     key: PRNGKeyArray
                     ):
     def policy_loss_fn(actor_params: flax.core.FrozenDict):
-      actions, mean, log_std, log_probs = self.model.sample_actions(
+      _, mean, log_std, log_probs = self.model.sample_actions(
           zs, actor_params, key=key
       )
 
@@ -478,11 +479,12 @@ class BMPC(struct.PyTreeNode):
       expert_dist = tfd.MultivariateNormalDiag(expert_mean, expert_std)
       kl_div = tfd.kl_divergence(action_dist, expert_dist)
       kl_scale = percentile_normalization(
-          kl_div.mean(axis=0), self.kl_scale
+          kl_div[0], self.kl_scale
       ).clip(1, None)
 
       policy_loss = jnp.mean(
-          bmpc_scale * (kl_div / sg(kl_scale) + self.entropy_coef * log_probs)
+          self.rho**jnp.arange(self.horizon) *
+          (kl_div / sg(kl_scale) + self.entropy_coef * log_probs).mean(axis=-1)
       )
 
       return policy_loss, {
