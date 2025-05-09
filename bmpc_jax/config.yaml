@@ -28,7 +28,7 @@ encoder:
 world_model:
   latent_dim: 512
   value_dropout: 0.01
-  num_value_nets: 5
+  num_value_nets: 2
   num_bins: 101
   symlog_min: -10
   symlog_max: 10
@@ -59,12 +59,10 @@ tdmpc2:
   reward_coef: 0.1
   value_coef: 0.1
   continue_coef: 1.0
-  entropy_coef: 1e-4
+  entropy_coef: 1e-3
   tau: 0.01
 
 bmpc:
   reanalyze_interval: 10
   reanalyze_batch_size: 20
   reanalyze_horizon: 3
-  discount: 1.0
-  min_policy_std: 0.10

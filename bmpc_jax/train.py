@@ -222,9 +222,9 @@ def train(cfg: dict):
       else:
         rng, action_key = jax.random.split(rng)
         action, plan = agent.act(
-            observation, prev_plan=plan, deterministic=False, key=action_key
+            observation, deterministic=False, key=action_key
         )
-        expert_mean, expert_std = plan[0][..., 0, :], plan[1][..., 0, :]
+        expert_mean, expert_std = plan[2][..., 0, :], plan[1][..., 0, :]
 
       next_observation, reward, terminated, truncated, info = env.step(action)
 
@@ -298,15 +298,16 @@ def train(cfg: dict):
           total_num_updates += 1
 
           # Reanalyze
-          true_zs = train_info.pop('true_zs')
-          zs = train_info.pop('zs')
+          encoder_zs = train_info.pop('encoder_zs')
+          latent_zs = train_info.pop('latent_zs')
+          finished = train_info.pop('finished')
           if total_num_updates % bmpc_config.reanalyze_interval == 0:
             total_reanalyze_steps += 1
             rng, reanalyze_key = jax.random.split(rng)
             b = bmpc_config.reanalyze_batch_size
             h = bmpc_config.reanalyze_horizon
             _, reanalyzed_plan = agent.plan(
-                z=true_zs[:, :b, :],
+                z=encoder_zs[:, :b, :],
                 horizon=h,
                 deterministic=True,
                 key=reanalyze_key
@@ -328,16 +329,12 @@ def train(cfg: dict):
 
           # Update policy with reanalyzed samples
           if not pretrain:
-            reanalyze_age = total_reanalyze_steps - batch['last_reanalyze']
-            bmpc_scale = bmpc_config.discount**reanalyze_age
             rng, policy_key = jax.random.split(rng)
             agent, policy_info = agent.update_policy(
-                zs=zs[:-1],
+                zs=latent_zs,
                 expert_mean=batch['expert_mean'],
-                expert_std=batch['expert_std'].clip(
-                    bmpc_config.min_policy_std, None
-                ),
-                bmpc_scale=bmpc_scale,
+                expert_std=batch['expert_std'],
+                finished=finished,
                 key=policy_key
             )
             train_info.update(policy_info)

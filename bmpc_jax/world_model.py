@@ -131,9 +131,18 @@ class WorldModel(struct.PyTreeNode):
     # Return/value model (ensemble)
     value_param_key, value_dropout_key = jax.random.split(value_key)
     value_base = partial(nn.Sequential, [
-        NormedLinear(latent_dim, activation=mish,
-                     dropout_rate=value_dropout, dtype=dtype),
-        NormedLinear(latent_dim, activation=mish, dtype=dtype),
+        NormedLinear(
+            latent_dim,
+            activation=mish,
+            dropout_rate=value_dropout,
+            dtype=dtype
+        ),
+        NormedLinear(
+            latent_dim,
+            activation=mish,
+            dropout_rate=value_dropout,
+            dtype=dtype
+        ),
         nn.Dense(
             num_bins, kernel_init=nn.initializers.zeros, dtype=dtype
         )
