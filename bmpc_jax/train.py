@@ -333,7 +333,11 @@ def train(cfg: dict):
             agent, policy_info = agent.update_policy(
                 zs=latent_zs,
                 expert_mean=batch['expert_mean'],
-                expert_std=batch['expert_std'],
+                expert_std=np.clip(
+                    batch['expert_std'] + bmpc_config.policy_std_bias,
+                    tdmpc_config.min_plan_std,
+                    tdmpc_config.max_plan_std
+                ),
                 finished=finished,
                 key=policy_key
             )

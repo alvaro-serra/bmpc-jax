@@ -486,8 +486,8 @@ class BMPC(struct.PyTreeNode):
 
       return policy_loss, {
           'policy_loss': policy_loss,
+          'policy_entropy': -log_probs.mean(),
           'kl_scale': kl_scale,
-          'entropy': -log_probs.mean()
       }
 
     policy_grads, policy_info = jax.grad(policy_loss_fn, has_aux=True)(

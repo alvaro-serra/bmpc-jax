@@ -55,14 +55,15 @@ tdmpc2:
   batch_size: 256
   discount: 0.99
   rho: 0.5
-  consistency_coef: 20
+  consistency_coef: 10
   reward_coef: 0.1
   value_coef: 0.1
   continue_coef: 1.0
-  entropy_coef: 1e-3
+  entropy_coef: 0
   tau: 0.01
 
 bmpc:
   reanalyze_interval: 10
   reanalyze_batch_size: 20
   reanalyze_horizon: 3
+  policy_std_bias: 0.05
