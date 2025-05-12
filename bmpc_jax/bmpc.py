@@ -293,9 +293,13 @@ class BMPC(struct.PyTreeNode):
       ###########################################################
       # Encoder forward pass
       ###########################################################
-      all_obs = jnp.stack([observations, next_observations], axis=0)
+      all_obs = jax.tree.map(
+          lambda x, y: jnp.stack([x, y], axis=0),
+          observations, next_observations
+      ) 
       all_zs = self.model.encode(all_obs, encoder_params, encoder_key)
-      encoder_zs, next_zs = all_zs
+      encoder_zs = jax.tree.map(lambda x: x[0], all_zs)
+      next_zs = jax.tree.map(lambda x: x[1], all_zs)
 
       ###########################################################
       # Latent rollout (dynamics + consistency loss)

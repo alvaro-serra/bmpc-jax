@@ -135,7 +135,6 @@ def train(cfg: dict):
           truncated=dummy_trunc,
           expert_mean=np.zeros_like(dummy_action),
           expert_std=np.ones_like(dummy_action),
-          last_reanalyze=np.zeros(env_config.num_envs, dtype=int),
       )
   )
 
@@ -202,7 +201,6 @@ def train(cfg: dict):
     ##############################
     ep_count = np.zeros(env_config.num_envs, dtype=int)
     prev_logged_step = global_step
-    plan = None
     observation, _ = env.reset(seed=cfg.seed)
 
     T = 500
@@ -216,9 +214,8 @@ def train(cfg: dict):
     for global_step in range(global_step, cfg.max_steps, env_config.num_envs):
       if global_step <= seed_steps:
         action = env.action_space.sample()
-        expert_mean, expert_std = np.zeros_like(action), np.full_like(
-            action, tdmpc_config.max_plan_std
-        )
+        expert_mean = np.zeros_like(action)
+        expert_std = np.full_like(action, tdmpc_config.max_plan_std)
       else:
         rng, action_key = jax.random.split(rng)
         action, plan = agent.act(
@@ -239,9 +236,6 @@ def train(cfg: dict):
                 truncated=truncated,
                 expert_mean=expert_mean,
                 expert_std=expert_std,
-                last_reanalyze=np.full(
-                    env_config.num_envs, total_reanalyze_steps, dtype=int
-                ),
             ),
             env_mask=~done
         )
@@ -250,11 +244,6 @@ def train(cfg: dict):
       # Handle terminations/truncations
       done = np.logical_or(terminated, truncated)
       if np.any(done):
-        if plan is not None:
-          plan = (
-              plan[0].at[done].set(0),
-              plan[1].at[done].set(agent.max_plan_std)
-          )
         for ienv in range(env_config.num_envs):
           if done[ienv]:
             r = info['episode']['r'][ienv]
@@ -322,8 +311,6 @@ def train(cfg: dict):
                 np.swapaxes(reanalyze_mean, 0, 1)
             replay_buffer.data['expert_std'][seq_inds, env_inds] = \
                 np.swapaxes(reanalyze_std, 0, 1)
-            replay_buffer.data['last_reanalyze'][seq_inds, env_inds] = \
-                total_reanalyze_steps
             batch['expert_mean'][:, :b, :] = reanalyze_mean
             batch['expert_std'][:, :b, :] = reanalyze_std
 
