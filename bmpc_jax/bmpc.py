@@ -1,19 +1,21 @@
 from __future__ import annotations
+
 from functools import partial
-from flax import struct
+from typing import Any, Dict, Optional, Tuple
+
 import flax
 import jax
-from jaxtyping import PRNGKeyArray, PyTree
-import optax
-
-from bmpc_jax.world_model import WorldModel
 import jax.numpy as jnp
-from bmpc_jax.common.loss import soft_crossentropy
 import numpy as np
-from typing import Any, Dict, Optional, Tuple
-from bmpc_jax.common.scale import percentile_normalization
-from bmpc_jax.common.util import sg, symlog
+import optax
+from flax import struct
+from jaxtyping import PRNGKeyArray, PyTree
 from tensorflow_probability.substrates.jax import distributions as tfd
+
+from bmpc_jax.common.loss import soft_crossentropy
+from bmpc_jax.common.scale import percentile_normalization
+from bmpc_jax.common.util import sg
+from bmpc_jax.world_model import WorldModel
 
 
 class BMPC(struct.PyTreeNode):
@@ -225,13 +227,26 @@ class BMPC(struct.PyTreeNode):
     ).squeeze(-3)
 
     if deterministic:
+      final_action_ind = jnp.argmax(elite_values, axis=-1)
+      action = jnp.take_along_axis(
+          elite_actions, final_action_ind[..., None, None, None], axis=-3
+      ).squeeze(-3)
       final_action = action[..., 0, :]
     else:
-      key, final_noise_key = jax.random.split(key)
+      # Sample from elites
+      key, gumbel_key, final_noise_key = jax.random.split(key, 3)
+      gumbels = jax.random.gumbel(gumbel_key, shape=elite_values.shape)
+      gumbel_scores = jnp.log(score) + gumbels
+      final_action_ind = jnp.argmax(gumbel_scores, axis=-1)
+      action = jnp.take_along_axis(
+          elite_actions, final_action_ind[..., None, None, None], axis=-3
+      ).squeeze(-3)
+      # Add noise
       final_action = action[..., 0, :] + std[..., 0, :] * jax.random.normal(
           final_noise_key, shape=batch_shape + (self.model.action_dim,)
       )
-    return final_action.clip(-1, 1), (mean, std)
+
+    return final_action.clip(-1, 1), (mean, std, action)
 
   @partial(jax.jit, static_argnames=('horizon'))
   def estimate_value(self,
@@ -286,42 +301,38 @@ class BMPC(struct.PyTreeNode):
       ###########################################################
       # Encoder forward pass
       ###########################################################
-      first_encoder_key, next_encoder_key = jax.random.split(encoder_key, 2)
-      first_z = self.model.encode(
-          jax.tree.map(lambda x: x[0], observations),
-          encoder_params,
-          key=first_encoder_key
-      )
-      next_z = self.model.encode(
-          next_observations, encoder_params, key=next_encoder_key
-      )
+      all_obs = jnp.stack([observations, next_observations], axis=0)
+      all_zs = self.model.encode(all_obs, encoder_params, encoder_key)
+      encoder_zs, next_zs = all_zs
 
       ###########################################################
       # Latent rollout (dynamics + consistency loss)
       ###########################################################
       done = jnp.logical_or(terminated, truncated)
-      finished = jnp.zeros((self.horizon+1, self.batch_size), dtype=bool)
+      finished = jnp.zeros((self.horizon, self.batch_size), dtype=bool)
+      latent_zs = jnp.zeros((self.horizon, self.batch_size, all_zs.shape[-1]))
+      latent_zs = latent_zs.at[0].set(encoder_zs[0])
       consistency_loss = 0
-      zs = jnp.zeros((self.horizon+1, self.batch_size, next_z.shape[-1]))
-      zs = zs.at[0].set(first_z)
       for t in range(self.horizon):
-        z = self.model.next(zs[t], actions[t], dynamics_params)
-        zs = zs.at[t+1].set(z)
+        z = self.model.next(latent_zs[t], actions[t], dynamics_params)
+
         consistency_loss += self.rho**t * \
-            jnp.mean((z - sg(next_z[t]))**2, where=~finished[t][:, None])
-        finished = finished.at[t+1].set(jnp.logical_or(finished[t], done[t]))
+            jnp.mean((z - sg(next_zs[t]))**2, where=~finished[t][:, None])
+        if t < self.horizon-1:
+          latent_zs = latent_zs.at[t+1].set(z)
+          finished = finished.at[t+1].set(jnp.logical_or(finished[t], done[t]))
 
       ###########################################################
       # Reward loss
       ###########################################################
-      _, reward_logits = self.model.reward(zs[:-1], actions, reward_params)
+      _, reward_logits = self.model.reward(latent_zs, actions, reward_params)
       reward_loss = jnp.sum(
           self.rho**np.arange(self.horizon) * soft_crossentropy(
               reward_logits, rewards,
               self.model.symlog_min,
               self.model.symlog_max,
               self.model.num_bins
-          ).mean(axis=-1, where=~finished[:-1])
+          ).mean(axis=-1, where=~finished)
       )
 
       ###########################################################
@@ -330,16 +341,15 @@ class BMPC(struct.PyTreeNode):
       value_key, value_target_key = jax.random.split(value_key, 2)
 
       # TD targets
-      true_zs = jnp.concatenate([first_z[None, ...], next_z[:-1]], axis=0)
-      td_targets = self.td_target(z=true_zs, key=value_target_key)
-      _, V_logits = self.model.V(zs[:-1], value_params, key=value_key)
+      _, V_logits = self.model.V(latent_zs, value_params, key=value_key)
+      td_targets = self.td_target(z=encoder_zs, key=value_target_key)
       value_loss = jnp.sum(
           self.rho**np.arange(self.horizon) * soft_crossentropy(
               V_logits, sg(td_targets),
               self.model.symlog_min,
               self.model.symlog_max,
               self.model.num_bins
-          ).mean(axis=-1, where=~finished[:-1])
+          ).mean(axis=-1, where=~finished)
       )
 
       ###########################################################
@@ -347,7 +357,7 @@ class BMPC(struct.PyTreeNode):
       ###########################################################
       if self.model.predict_continues:
         continue_logits = self.model.continue_model.apply_fn(
-            {'params': continue_params}, zs[:-1]
+            {'params': continue_params}, latent_zs
         ).squeeze(-1)
         continue_loss = optax.sigmoid_binary_cross_entropy(
             continue_logits, 1 - terminated
@@ -371,8 +381,9 @@ class BMPC(struct.PyTreeNode):
           'value_loss': value_loss,
           'continue_loss': continue_loss,
           'total_loss': total_loss,
-          'true_zs': true_zs,
-          'zs': zs
+          'encoder_zs': encoder_zs,
+          'latent_zs': latent_zs,
+          'finished': finished,
       }
 
     # Update world model
@@ -466,7 +477,7 @@ class BMPC(struct.PyTreeNode):
                     zs: jax.Array,
                     expert_mean: jax.Array,
                     expert_std: jax.Array,
-                    bmpc_scale: jax.Array,
+                    finished: jax.Array,
                     key: PRNGKeyArray
                     ):
     def policy_loss_fn(actor_params: flax.core.FrozenDict):
@@ -483,14 +494,15 @@ class BMPC(struct.PyTreeNode):
       ).clip(1, None)
 
       policy_loss = jnp.mean(
-          self.rho**jnp.arange(self.horizon) *
-          (kl_div / sg(kl_scale) + self.entropy_coef * log_probs).mean(axis=-1)
+          self.rho**jnp.arange(self.horizon)[:, None] *
+          (kl_div / sg(kl_scale) + self.entropy_coef * log_probs),
+          where=~finished
       )
 
       return policy_loss, {
           'policy_loss': policy_loss,
+          'policy_entropy': -log_probs.mean(),
           'kl_scale': kl_scale,
-          'entropy': -log_probs.mean()
       }
 
     policy_grads, policy_info = jax.grad(policy_loss_fn, has_aux=True)(
