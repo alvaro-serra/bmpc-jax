@@ -1,19 +1,21 @@
 from __future__ import annotations
+
 from functools import partial
-from flax import struct
+from typing import Any, Dict, Optional, Tuple
+
 import flax
 import jax
-from jaxtyping import PRNGKeyArray, PyTree
-import optax
-
-from bmpc_jax.world_model import WorldModel
 import jax.numpy as jnp
-from bmpc_jax.common.loss import soft_crossentropy
 import numpy as np
-from typing import Any, Dict, Optional, Tuple
-from bmpc_jax.common.scale import percentile_normalization
-from bmpc_jax.common.util import sg, symlog
+import optax
+from flax import struct
+from jaxtyping import PRNGKeyArray, PyTree
 from tensorflow_probability.substrates.jax import distributions as tfd
+
+from bmpc_jax.common.loss import soft_crossentropy
+from bmpc_jax.common.scale import percentile_normalization
+from bmpc_jax.common.util import sg
+from bmpc_jax.world_model import WorldModel
 
 
 class BMPC(struct.PyTreeNode):
@@ -216,21 +218,26 @@ class BMPC(struct.PyTreeNode):
       ).clip(self.min_plan_std, self.max_plan_std)
 
     # Select final action
-    key, gumbel_key = jax.random.split(key)
-    gumbels = jax.random.gumbel(gumbel_key, shape=elite_values.shape)
-    gumbel_scores = jnp.log(score) + gumbels
-    action_ind = jnp.argmax(gumbel_scores, axis=-1)
-    action = jnp.take_along_axis(
-        elite_actions, action_ind[..., None, None, None], axis=-3
-    ).squeeze(-3)
-
     if deterministic:
+      final_action_ind = jnp.argmax(elite_values, axis=-1)
+      action = jnp.take_along_axis(
+          elite_actions, final_action_ind[..., None, None, None], axis=-3
+      ).squeeze(-3)
       final_action = action[..., 0, :]
     else:
-      key, final_noise_key = jax.random.split(key)
+      # Sample from elites
+      key, gumbel_key, final_noise_key = jax.random.split(key, 3)
+      gumbels = jax.random.gumbel(gumbel_key, shape=elite_values.shape)
+      gumbel_scores = jnp.log(score) + gumbels
+      final_action_ind = jnp.argmax(gumbel_scores, axis=-1)
+      action = jnp.take_along_axis(
+          elite_actions, final_action_ind[..., None, None, None], axis=-3
+      ).squeeze(-3)
+      # Add noise
       final_action = action[..., 0, :] + std[..., 0, :] * jax.random.normal(
           final_noise_key, shape=batch_shape + (self.model.action_dim,)
       )
+
     return final_action.clip(-1, 1), (mean, std, action)
 
   @partial(jax.jit, static_argnames=('horizon'))

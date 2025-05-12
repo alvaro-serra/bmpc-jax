@@ -1,22 +1,20 @@
 import copy
 from functools import partial
 from typing import *
+
 import flax.linen as nn
-from flax.training.train_state import TrainState
-from flax import struct
-import numpy as np
-from numpy.typing import ArrayLike
-from bmpc_jax.networks import NormedLinear
-from bmpc_jax.common.activations import mish, simnorm
-from jaxtyping import PRNGKeyArray
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
-from bmpc_jax.networks import Ensemble
-from bmpc_jax.common.util import symlog, two_hot_inv
+from flax import struct
+from flax.training.train_state import TrainState
+from jaxtyping import PRNGKeyArray
 from tensorflow_probability.substrates.jax import distributions as tfd
-from tensorflow_probability.substrates.jax import bijectors as tfb
-import flax
+
+from bmpc_jax.common.activations import mish, simnorm
+from bmpc_jax.common.util import symlog, two_hot_inv
+from bmpc_jax.networks import Ensemble, NormedLinear
 
 
 class WorldModel(struct.PyTreeNode):
@@ -128,7 +126,7 @@ class WorldModel(struct.PyTreeNode):
         )
     )
 
-    # Return/value model (ensemble)
+    # Value model
     value_param_key, value_dropout_key = jax.random.split(value_key)
     value_base = partial(nn.Sequential, [
         NormedLinear(
@@ -214,10 +212,9 @@ class WorldModel(struct.PyTreeNode):
 
       print("Value Model")
       print("-----------")
-      value_param_key, value_dropout_key = jax.random.split(value_key)
       print(
           value_ensemble.tabulate(
-              {'params': value_param_key, 'dropout': value_dropout_key},
+              {'params': jax.random.key(0), 'dropout': jax.random.key(0)},
               jnp.ones(latent_dim + action_dim),
               compute_flops=True
           )
