@@ -32,7 +32,7 @@ class BMPC(struct.PyTreeNode):
   min_plan_std: float
   max_plan_std: float
   temperature: float
-
+  policy_std_bias: float
   # Optimization
   batch_size: int = struct.field(pytree_node=False)
   discount: float
@@ -41,7 +41,6 @@ class BMPC(struct.PyTreeNode):
   reward_coef: float
   value_coef: float
   continue_coef: float
-  entropy_coef: float
   tau: float
 
   @classmethod
@@ -57,6 +56,7 @@ class BMPC(struct.PyTreeNode):
              min_plan_std: float,
              max_plan_std: float,
              temperature: float,
+             policy_std_bias: float,
              # Optimization
              discount: float,
              batch_size: int,
@@ -65,7 +65,6 @@ class BMPC(struct.PyTreeNode):
              reward_coef: float,
              value_coef: float,
              continue_coef: float,
-             entropy_coef: float,
              tau: float
              ) -> BMPC:
 
@@ -79,6 +78,7 @@ class BMPC(struct.PyTreeNode):
                min_plan_std=min_plan_std,
                max_plan_std=max_plan_std,
                temperature=temperature,
+               policy_std_bias=policy_std_bias,
                discount=discount,
                batch_size=batch_size,
                rho=rho,
@@ -86,7 +86,6 @@ class BMPC(struct.PyTreeNode):
                reward_coef=reward_coef,
                value_coef=value_coef,
                continue_coef=continue_coef,
-               entropy_coef=entropy_coef,
                tau=tau,
                kl_scale=jnp.array([1.0]),
                )
@@ -155,6 +154,7 @@ class BMPC(struct.PyTreeNode):
             self.model.sample_actions(
                 z=z_t,
                 params=self.model.policy_model.params,
+                std_bias=self.policy_std_bias,
                 key=prior_noise_keys[t]
             )[0]
         )
@@ -296,7 +296,7 @@ class BMPC(struct.PyTreeNode):
       all_obs = jax.tree.map(
           lambda x, y: jnp.stack([x, y], axis=0),
           observations, next_observations
-      ) 
+      )
       all_zs = self.model.encode(all_obs, encoder_params, encoder_key)
       encoder_zs = jax.tree.map(lambda x: x[0], all_zs)
       next_zs = jax.tree.map(lambda x: x[1], all_zs)
@@ -438,7 +438,10 @@ class BMPC(struct.PyTreeNode):
     G, discount = 0, 1
     for t in range(num_td_steps):
       action = self.model.sample_actions(
-          z, self.model.policy_model.params, key=action_keys[t]
+          z=z,
+          params=self.model.policy_model.params,
+          std_bias=self.policy_std_bias,
+          key=action_keys[t]
       )[0]
       reward, _ = self.model.reward(z, action, self.model.reward_model.params)
       z = self.model.next(z, action, self.model.dynamics_model.params)
@@ -490,8 +493,7 @@ class BMPC(struct.PyTreeNode):
       ).clip(1, None)
 
       policy_loss = jnp.mean(
-          self.rho**jnp.arange(self.horizon)[:, None] *
-          (kl_div / sg(kl_scale) + self.entropy_coef * log_probs),
+          self.rho**jnp.arange(self.horizon)[:, None] * kl_div / sg(kl_scale),
           where=~finished
       )
 

@@ -51,6 +51,7 @@ tdmpc2:
   min_plan_std: 0
   max_plan_std: 2
   temperature: 0.5
+  policy_std_bias: 0.05
   # Optimization
   batch_size: 256
   discount: 0.99
@@ -59,11 +60,9 @@ tdmpc2:
   reward_coef: 0.1
   value_coef: 0.1
   continue_coef: 1.0
-  entropy_coef: 0
   tau: 0.01
 
 bmpc:
   reanalyze_interval: 10
   reanalyze_batch_size: 20
   reanalyze_horizon: 3
-  policy_std_bias: 0.05

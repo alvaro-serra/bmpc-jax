@@ -221,7 +221,7 @@ def train(cfg: dict):
         action, plan = agent.act(
             observation, deterministic=False, key=action_key
         )
-        expert_mean, expert_std = plan[2][..., 0, :], plan[1][..., 0, :]
+        expert_mean, expert_std = plan[0][..., 0, :], plan[1][..., 0, :]
 
       next_observation, reward, terminated, truncated, info = env.step(action)
 
@@ -320,11 +320,7 @@ def train(cfg: dict):
             agent, policy_info = agent.update_policy(
                 zs=latent_zs,
                 expert_mean=batch['expert_mean'],
-                expert_std=np.clip(
-                    batch['expert_std'] + bmpc_config.policy_std_bias,
-                    tdmpc_config.min_plan_std,
-                    tdmpc_config.max_plan_std
-                ),
+                expert_std=batch['expert_std'],
                 finished=finished,
                 key=policy_key
             )
