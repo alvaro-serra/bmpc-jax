@@ -93,12 +93,17 @@ class BMPC(struct.PyTreeNode):
   def act(self,
           obs: PyTree,
           prev_plan: Optional[Tuple[jax.Array, jax.Array]] = None,
-          deterministic: bool = True,
+          deterministic: bool = False,
+          train: bool = False,
           *,
           key: PRNGKeyArray
           ) -> Tuple[np.ndarray, Optional[Tuple[jax.Array]]]:
     encoder_key, action_key = jax.random.split(key, 2)
-    z = self.model.encode(obs, self.model.encoder.params, key=encoder_key)
+    z = self.model.encode(
+        obs=obs,
+        params=self.model.encoder.params,
+        key=encoder_key
+    )
 
     if self.mpc:
       action, plan = self.plan(
@@ -106,22 +111,26 @@ class BMPC(struct.PyTreeNode):
           horizon=self.horizon,
           prev_plan=prev_plan,
           deterministic=deterministic,
+          train=train,
           key=action_key
       )
     else:
       action = self.model.sample_actions(
-          z, self.model.policy_model.params, key=action_key
+          z=z,
+          params=self.model.policy_model.params,
+          key=action_key
       )[0]
       plan = None
 
     return np.array(action), plan
 
-  @partial(jax.jit, static_argnames=('horizon', 'deterministic'))
+  @partial(jax.jit, static_argnames=('horizon', 'deterministic', 'train'))
   def plan(self,
            z: jax.Array,
            horizon: int,
            prev_plan: Tuple[jax.Array, jax.Array] = None,
            deterministic: bool = False,
+           train: bool = False,
            *,
            key: PRNGKeyArray,
            ) -> Tuple[jax.Array, Tuple[jax.Array, jax.Array]]:
@@ -219,24 +228,27 @@ class BMPC(struct.PyTreeNode):
 
     # Select final action
     if deterministic:
-      final_action_ind = jnp.argmax(elite_values, axis=-1)
+      action_ind = jnp.argmax(elite_values, axis=-1)
       action = jnp.take_along_axis(
-          elite_actions, final_action_ind[..., None, None, None], axis=-3
+          elite_actions, action_ind[..., None, None, None], axis=-3
       ).squeeze(-3)
-      final_action = action[..., 0, :]
     else:
       # Sample from elites
-      key, gumbel_key, final_noise_key = jax.random.split(key, 3)
+      key, gumbel_key = jax.random.split(key, 2)
       gumbels = jax.random.gumbel(gumbel_key, shape=elite_values.shape)
       gumbel_scores = jnp.log(score) + gumbels
-      final_action_ind = jnp.argmax(gumbel_scores, axis=-1)
+      action_ind = jnp.argmax(gumbel_scores, axis=-1)
       action = jnp.take_along_axis(
-          elite_actions, final_action_ind[..., None, None, None], axis=-3
+          elite_actions, action_ind[..., None, None, None], axis=-3
       ).squeeze(-3)
-      # Add noise
+      
+    if train:
+      key, final_noise_key = jax.random.split(key, 2)
       final_action = action[..., 0, :] + std[..., 0, :] * jax.random.normal(
           final_noise_key, shape=batch_shape + (self.model.action_dim,)
       )
+    else:
+      final_action = action[..., 0, :]
 
     return final_action.clip(-1, 1), (mean, std, action)
 

@@ -144,7 +144,7 @@ def train(cfg: dict):
       tx=optax.chain(
           optax.zero_nans(),
           optax.clip_by_global_norm(model_config.max_grad_norm),
-          optax.adam(encoder_config.learning_rate),
+          optax.adamw(encoder_config.learning_rate),
       )
   )
 
@@ -219,7 +219,10 @@ def train(cfg: dict):
       else:
         rng, action_key = jax.random.split(rng)
         action, plan = agent.act(
-            observation, deterministic=False, key=action_key
+            obs=observation,
+            deterministic=False,
+            train=True,
+            key=action_key
         )
         expert_mean, expert_std = plan[0][..., 0, :], plan[1][..., 0, :]
 

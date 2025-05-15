@@ -9,7 +9,7 @@ import numpy as np
 import optax
 from flax import struct
 from flax.training.train_state import TrainState
-from jaxtyping import PRNGKeyArray
+from jaxtyping import PRNGKeyArray, PyTree
 from tensorflow_probability.substrates.jax import distributions as tfd
 
 from bmpc_jax.common.activations import mish, simnorm
@@ -18,6 +18,7 @@ from bmpc_jax.networks import Ensemble, NormedLinear
 
 MIN_LOG_STD = -5
 MAX_LOG_STD = 1
+
 
 class WorldModel(struct.PyTreeNode):
   # Models
@@ -59,14 +60,14 @@ class WorldModel(struct.PyTreeNode):
              learning_rate: float,
              max_grad_norm: float = 20,
              # Misc
-
              tabulate: bool = False,
              dtype: jnp.dtype = jnp.float32,
              *,
              key: PRNGKeyArray,
              ):
-    dynamics_key, reward_key, value_key, policy_key, continue_key = jax.random.split(
-        key, 5)
+    (
+        dynamics_key, reward_key, value_key, policy_key, continue_key
+    ) = jax.random.split(key, 5)
 
     # Latent forward dynamics model
     dynamics_module = nn.Sequential([
@@ -85,7 +86,7 @@ class WorldModel(struct.PyTreeNode):
         tx=optax.chain(
             optax.zero_nans(),
             optax.clip_by_global_norm(max_grad_norm),
-            optax.adam(learning_rate),
+            optax.adamw(learning_rate),
         )
     )
 
@@ -104,7 +105,7 @@ class WorldModel(struct.PyTreeNode):
         tx=optax.chain(
             optax.zero_nans(),
             optax.clip_by_global_norm(max_grad_norm),
-            optax.adam(learning_rate),
+            optax.adamw(learning_rate),
         )
     )
 
@@ -124,7 +125,7 @@ class WorldModel(struct.PyTreeNode):
         tx=optax.chain(
             optax.zero_nans(),
             optax.clip_by_global_norm(max_grad_norm),
-            optax.adam(learning_rate),
+            optax.adamw(learning_rate),
         )
     )
 
@@ -156,7 +157,7 @@ class WorldModel(struct.PyTreeNode):
         tx=optax.chain(
             optax.zero_nans(),
             optax.clip_by_global_norm(max_grad_norm),
-            optax.adam(learning_rate),
+            optax.adamw(learning_rate),
         )
     )
     target_value_model = TrainState.create(
@@ -177,7 +178,7 @@ class WorldModel(struct.PyTreeNode):
           tx=optax.chain(
               optax.zero_nans(),
               optax.clip_by_global_norm(max_grad_norm),
-              optax.adam(learning_rate),
+              optax.adamw(learning_rate),
           )
       )
     else:
@@ -253,7 +254,7 @@ class WorldModel(struct.PyTreeNode):
     )
 
   @jax.jit
-  def encode(self, obs: np.ndarray, params: Dict, key: PRNGKeyArray) -> jax.Array:
+  def encode(self, obs: PyTree, params: Dict, key: PRNGKeyArray) -> jax.Array:
     if self.symlog_obs:
       obs = jax.tree.map(lambda x: symlog(x), obs)
     return self.encoder.apply_fn({'params': params}, obs, rngs={'dropout': key})
