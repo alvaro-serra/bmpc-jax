@@ -225,6 +225,9 @@ def train(cfg: dict):
             key=action_key
         )
         expert_mean, expert_std = plan[0][..., 0, :], plan[1][..., 0, :]
+        if log_this_step:
+          writer.scalar('train/plan_mean', np.mean(plan[0]), global_step)
+          writer.scalar('train/plan_std', np.mean(plan[1]), global_step)
 
       next_observation, reward, terminated, truncated, info = env.step(action)
 

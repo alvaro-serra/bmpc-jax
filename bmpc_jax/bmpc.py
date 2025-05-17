@@ -234,23 +234,25 @@ class BMPC(struct.PyTreeNode):
       ).squeeze(-3)
     else:
       # Sample from elites
-      key, gumbel_key = jax.random.split(key, 2)
-      gumbels = jax.random.gumbel(gumbel_key, shape=elite_values.shape)
-      gumbel_scores = jnp.log(score) + gumbels
-      action_ind = jnp.argmax(gumbel_scores, axis=-1)
+      key, final_action_key = jax.random.split(key)
+      action_ind = jax.random.categorical(
+          final_action_key, logits=jnp.log(score), shape=batch_shape
+      )
       action = jnp.take_along_axis(
           elite_actions, action_ind[..., None, None, None], axis=-3
       ).squeeze(-3)
-      
+
+    # Compute final plan distribution
     if train:
-      key, final_noise_key = jax.random.split(key, 2)
-      final_action = action[..., 0, :] + std[..., 0, :] * jax.random.normal(
-          final_noise_key, shape=batch_shape + (self.model.action_dim,)
+      key, final_noise_key = jax.random.split(key)
+      final_action = action[..., 0, :] + std[..., 0, :] * \
+          jax.random.normal(
+              final_noise_key, shape=batch_shape + (self.model.action_dim,)
       )
     else:
       final_action = action[..., 0, :]
 
-    return final_action.clip(-1, 1), (mean, std, action)
+    return final_action.clip(-1, 1), (mean, std)
 
   @partial(jax.jit, static_argnames=('horizon'))
   def estimate_value(self,
@@ -323,24 +325,24 @@ class BMPC(struct.PyTreeNode):
       consistency_loss = 0
       for t in range(self.horizon):
         z = self.model.next(latent_zs[t], actions[t], dynamics_params)
-
         consistency_loss += self.rho**t * \
             jnp.mean((z - sg(next_zs[t]))**2, where=~finished[t][:, None])
         if t < self.horizon-1:
           latent_zs = latent_zs.at[t+1].set(z)
           finished = finished.at[t+1].set(jnp.logical_or(finished[t], done[t]))
+      consistency_loss /= self.horizon
 
       ###########################################################
       # Reward loss
       ###########################################################
       _, reward_logits = self.model.reward(latent_zs, actions, reward_params)
-      reward_loss = jnp.sum(
-          self.rho**np.arange(self.horizon) * soft_crossentropy(
+      reward_loss = jnp.mean(
+          self.rho**np.arange(self.horizon)[:, None] * soft_crossentropy(
               reward_logits, rewards,
               self.model.symlog_min,
               self.model.symlog_max,
               self.model.num_bins
-          ).mean(axis=-1, where=~finished)
+          ), where=~finished
       )
 
       ###########################################################
@@ -351,13 +353,13 @@ class BMPC(struct.PyTreeNode):
       # TD targets
       _, V_logits = self.model.V(latent_zs, value_params, key=value_key)
       td_targets = self.td_target(z=encoder_zs, key=value_target_key)
-      value_loss = jnp.sum(
-          self.rho**np.arange(self.horizon) * soft_crossentropy(
+      value_loss = jnp.mean(
+          self.rho**np.arange(self.horizon)[:, None] * soft_crossentropy(
               V_logits, sg(td_targets),
               self.model.symlog_min,
               self.model.symlog_max,
               self.model.num_bins
-          ).mean(axis=-1, where=~finished)
+          ), where=~finished
       )
 
       ###########################################################
@@ -373,9 +375,6 @@ class BMPC(struct.PyTreeNode):
       else:
         continue_loss = 0.0
 
-      consistency_loss = consistency_loss / self.horizon
-      reward_loss = reward_loss / self.horizon
-      value_loss = value_loss / self.horizon / self.model.num_value_nets
       total_loss = (
           self.consistency_coef * consistency_loss +
           self.reward_coef * reward_loss +
@@ -493,7 +492,9 @@ class BMPC(struct.PyTreeNode):
                     ):
     def policy_loss_fn(actor_params: flax.core.FrozenDict):
       _, mean, log_std, log_probs = self.model.sample_actions(
-          zs, actor_params, key=key
+          z=zs,
+          params=actor_params,
+          key=key
       )
 
       # Compute KL divergence between policy and expert
@@ -511,15 +512,15 @@ class BMPC(struct.PyTreeNode):
 
       return policy_loss, {
           'policy_loss': policy_loss,
-          'policy_entropy': -log_probs.mean(),
           'kl_scale': kl_scale,
+          'policy_entropy': -log_probs.mean(),
+          'policy_log_std': log_std.mean(),
       }
 
     policy_grads, policy_info = jax.grad(policy_loss_fn, has_aux=True)(
         self.model.policy_model.params
     )
     new_policy = self.model.policy_model.apply_gradients(grads=policy_grads)
-
     new_agent = self.replace(
         model=self.model.replace(policy_model=new_policy),
         kl_scale=policy_info['kl_scale'],
