@@ -92,13 +92,7 @@ def train(cfg: dict):
           )
           for _ in range(encoder_config.num_encoder_layers-1)
       ] + [
-          NormedLinear(
-              model_config.latent_dim,
-              activation=partial(
-                  simnorm, simplex_dim=model_config.simnorm_dim
-              ),
-              dtype=dtype
-          )
+          NormedLinear(model_config.latent_dim, activation=None, dtype=dtype)
       ]
   )
 
@@ -211,15 +205,16 @@ def train(cfg: dict):
     total_reanalyze_steps = 0
     pbar = tqdm.tqdm(initial=global_step, total=cfg.max_steps)
     done = np.zeros(env_config.num_envs, dtype=bool)
+    plan = None
     for global_step in range(global_step, cfg.max_steps, env_config.num_envs):
       if global_step <= seed_steps:
         action = env.action_space.sample()
-        expert_mean = np.zeros_like(action)
-        expert_std = np.full_like(action, tdmpc_config.max_plan_std)
+        expert_mean, expert_std = np.zeros_like(action), np.ones_like(action)
       else:
         rng, action_key = jax.random.split(rng)
         action, plan = agent.act(
             obs=observation,
+            prev_plan=plan,
             deterministic=False,
             train=True,
             key=action_key
@@ -250,6 +245,11 @@ def train(cfg: dict):
       # Handle terminations/truncations
       done = np.logical_or(terminated, truncated)
       if np.any(done):
+        if plan is not None:
+          plan = (
+              plan[0].at[done].set(0),
+              plan[1].at[done].set(agent.max_plan_std)
+          )
         for ienv in range(env_config.num_envs):
           if done[ienv]:
             r = info['episode']['r'][ienv]
@@ -304,7 +304,6 @@ def train(cfg: dict):
             _, reanalyzed_plan = agent.plan(
                 z=encoder_zs[:, :b, :],
                 horizon=h,
-                deterministic=True,
                 key=reanalyze_key
             )
             reanalyze_mean = reanalyzed_plan[0][..., 0, :]

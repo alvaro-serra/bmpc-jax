@@ -33,6 +33,7 @@ class WorldModel(struct.PyTreeNode):
   action_dim: int = struct.field(pytree_node=False)
   # Architecture
   latent_dim: int = struct.field(pytree_node=False)
+  simnorm_dim: int = struct.field(pytree_node=False)
   num_value_nets: int = struct.field(pytree_node=False)
   num_bins: int = struct.field(pytree_node=False)
   symlog_min: float
@@ -73,11 +74,7 @@ class WorldModel(struct.PyTreeNode):
     dynamics_module = nn.Sequential([
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
-        NormedLinear(
-            latent_dim,
-            activation=partial(simnorm, simplex_dim=simnorm_dim),
-            dtype=dtype
-        )
+        NormedLinear(latent_dim, activation=None, dtype=dtype),
     ])
     dynamics_model = TrainState.create(
         apply_fn=dynamics_module.apply,
@@ -245,6 +242,7 @@ class WorldModel(struct.PyTreeNode):
         continue_model=continue_model,
         # Architecture
         latent_dim=latent_dim,
+        simnorm_dim=simnorm_dim,
         num_value_nets=num_value_nets,
         num_bins=num_bins,
         symlog_min=float(symlog_min),
@@ -257,12 +255,15 @@ class WorldModel(struct.PyTreeNode):
   def encode(self, obs: PyTree, params: Dict, key: PRNGKeyArray) -> jax.Array:
     if self.symlog_obs:
       obs = jax.tree.map(lambda x: symlog(x), obs)
-    return self.encoder.apply_fn({'params': params}, obs, rngs={'dropout': key})
+    z = self.encoder.apply_fn({'params': params}, obs, rngs={'dropout': key})
+    return simnorm(z, simplex_dim=self.simnorm_dim) 
 
   @jax.jit
   def next(self, z: jax.Array, a: jax.Array, params: Dict) -> jax.Array:
-    z = jnp.concatenate([z, a], axis=-1)
-    return self.dynamics_model.apply_fn({'params': params}, z)
+    z = self.dynamics_model.apply_fn(
+        {'params': params}, jnp.concatenate([z, a], axis=-1)
+    )
+    return simnorm(z, simplex_dim=self.simnorm_dim)
 
   @jax.jit
   def reward(self, z: jax.Array, a: jax.Array, params: Dict
@@ -278,7 +279,7 @@ class WorldModel(struct.PyTreeNode):
   def sample_actions(self,
                      z: jax.Array,
                      params: Dict,
-                     std_bias: float = 0.0,
+                     std_scale: float = 1,
                      *,
                      key: PRNGKeyArray
                      ) -> Tuple[jax.Array, ...]:
@@ -289,7 +290,7 @@ class WorldModel(struct.PyTreeNode):
     mean = jnp.tanh(mean)
     log_std = MIN_LOG_STD + (MAX_LOG_STD - MIN_LOG_STD) * \
         0.5 * (jnp.tanh(log_std) + 1)
-    std = jnp.exp(log_std) + std_bias
+    std = std_scale * jnp.exp(log_std)
 
     # Sample action and compute logprobs
     dist = tfd.MultivariateNormalDiag(loc=mean, scale_diag=std)
