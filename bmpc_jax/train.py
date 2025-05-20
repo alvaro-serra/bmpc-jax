@@ -92,13 +92,7 @@ def train(cfg: dict):
           )
           for _ in range(encoder_config.num_encoder_layers-1)
       ] + [
-          NormedLinear(
-              model_config.latent_dim,
-              activation=partial(
-                  simnorm, simplex_dim=model_config.simnorm_dim
-              ),
-              dtype=dtype
-          )
+          NormedLinear(model_config.latent_dim, activation=None, dtype=dtype)
       ]
   )
 
@@ -135,7 +129,6 @@ def train(cfg: dict):
           truncated=dummy_trunc,
           expert_mean=np.zeros_like(dummy_action),
           expert_std=np.ones_like(dummy_action),
-          last_reanalyze=np.zeros(env_config.num_envs, dtype=int),
       )
   )
 
@@ -145,7 +138,7 @@ def train(cfg: dict):
       tx=optax.chain(
           optax.zero_nans(),
           optax.clip_by_global_norm(model_config.max_grad_norm),
-          optax.adam(encoder_config.learning_rate),
+          optax.adamw(encoder_config.learning_rate),
       )
   )
 
@@ -202,7 +195,6 @@ def train(cfg: dict):
     ##############################
     ep_count = np.zeros(env_config.num_envs, dtype=int)
     prev_logged_step = global_step
-    plan = None
     observation, _ = env.reset(seed=cfg.seed)
 
     T = 500
@@ -213,18 +205,24 @@ def train(cfg: dict):
     total_reanalyze_steps = 0
     pbar = tqdm.tqdm(initial=global_step, total=cfg.max_steps)
     done = np.zeros(env_config.num_envs, dtype=bool)
+    plan = None
     for global_step in range(global_step, cfg.max_steps, env_config.num_envs):
       if global_step <= seed_steps:
         action = env.action_space.sample()
-        expert_mean, expert_std = np.zeros_like(action), np.full_like(
-            action, tdmpc_config.max_plan_std
-        )
+        expert_mean, expert_std = np.zeros_like(action), np.ones_like(action)
       else:
         rng, action_key = jax.random.split(rng)
         action, plan = agent.act(
-            observation, deterministic=False, key=action_key
+            obs=observation,
+            prev_plan=plan,
+            deterministic=False,
+            train=True,
+            key=action_key
         )
-        expert_mean, expert_std = plan[2][..., 0, :], plan[1][..., 0, :]
+        expert_mean, expert_std = plan[0][..., 0, :], plan[1][..., 0, :]
+        if log_this_step:
+          writer.scalar('train/plan_mean', np.mean(plan[0]), global_step)
+          writer.scalar('train/plan_std', np.mean(plan[1]), global_step)
 
       next_observation, reward, terminated, truncated, info = env.step(action)
 
@@ -239,9 +237,6 @@ def train(cfg: dict):
                 truncated=truncated,
                 expert_mean=expert_mean,
                 expert_std=expert_std,
-                last_reanalyze=np.full(
-                    env_config.num_envs, total_reanalyze_steps, dtype=int
-                ),
             ),
             env_mask=~done
         )
@@ -309,7 +304,6 @@ def train(cfg: dict):
             _, reanalyzed_plan = agent.plan(
                 z=encoder_zs[:, :b, :],
                 horizon=h,
-                deterministic=True,
                 key=reanalyze_key
             )
             reanalyze_mean = reanalyzed_plan[0][..., 0, :]
@@ -322,8 +316,6 @@ def train(cfg: dict):
                 np.swapaxes(reanalyze_mean, 0, 1)
             replay_buffer.data['expert_std'][seq_inds, env_inds] = \
                 np.swapaxes(reanalyze_std, 0, 1)
-            replay_buffer.data['last_reanalyze'][seq_inds, env_inds] = \
-                total_reanalyze_steps
             batch['expert_mean'][:, :b, :] = reanalyze_mean
             batch['expert_std'][:, :b, :] = reanalyze_std
 
@@ -333,11 +325,7 @@ def train(cfg: dict):
             agent, policy_info = agent.update_policy(
                 zs=latent_zs,
                 expert_mean=batch['expert_mean'],
-                expert_std=np.clip(
-                    batch['expert_std'] + bmpc_config.policy_std_bias,
-                    tdmpc_config.min_plan_std,
-                    tdmpc_config.max_plan_std
-                ),
+                expert_std=batch['expert_std'],
                 finished=finished,
                 key=policy_key
             )

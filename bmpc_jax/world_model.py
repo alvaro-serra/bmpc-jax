@@ -8,12 +8,15 @@ import numpy as np
 import optax
 from flax import struct
 from flax.training.train_state import TrainState
-from jaxtyping import PRNGKeyArray
+from jaxtyping import PRNGKeyArray, PyTree
 from tensorflow_probability.substrates.jax import distributions as tfd
 
 from bmpc_jax.common.activations import mish, simnorm
 from bmpc_jax.common.util import symlog, two_hot_inv
 from bmpc_jax.networks import Ensemble, NormedLinear
+
+MIN_LOG_STD = -5
+MAX_LOG_STD = 1
 
 
 class WorldModel(struct.PyTreeNode):
@@ -29,6 +32,7 @@ class WorldModel(struct.PyTreeNode):
   action_dim: int = struct.field(pytree_node=False)
   # Architecture
   latent_dim: int = struct.field(pytree_node=False)
+  simnorm_dim: int = struct.field(pytree_node=False)
   num_value_nets: int = struct.field(pytree_node=False)
   num_bins: int = struct.field(pytree_node=False)
   symlog_min: float
@@ -56,24 +60,20 @@ class WorldModel(struct.PyTreeNode):
              learning_rate: float,
              max_grad_norm: float = 20,
              # Misc
-
              tabulate: bool = False,
              dtype: jnp.dtype = jnp.float32,
              *,
              key: PRNGKeyArray,
              ):
-    dynamics_key, reward_key, value_key, policy_key, continue_key = jax.random.split(
-        key, 5)
+    (
+        dynamics_key, reward_key, value_key, policy_key, continue_key
+    ) = jax.random.split(key, 5)
 
     # Latent forward dynamics model
     dynamics_module = nn.Sequential([
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
-        NormedLinear(
-            latent_dim,
-            activation=partial(simnorm, simplex_dim=simnorm_dim),
-            dtype=dtype
-        )
+        NormedLinear(latent_dim, activation=None, dtype=dtype),
     ])
     dynamics_model = TrainState.create(
         apply_fn=dynamics_module.apply,
@@ -82,7 +82,7 @@ class WorldModel(struct.PyTreeNode):
         tx=optax.chain(
             optax.zero_nans(),
             optax.clip_by_global_norm(max_grad_norm),
-            optax.adam(learning_rate),
+            optax.adamw(learning_rate),
         )
     )
 
@@ -101,7 +101,7 @@ class WorldModel(struct.PyTreeNode):
         tx=optax.chain(
             optax.zero_nans(),
             optax.clip_by_global_norm(max_grad_norm),
-            optax.adam(learning_rate),
+            optax.adamw(learning_rate),
         )
     )
 
@@ -121,7 +121,7 @@ class WorldModel(struct.PyTreeNode):
         tx=optax.chain(
             optax.zero_nans(),
             optax.clip_by_global_norm(max_grad_norm),
-            optax.adam(learning_rate),
+            optax.adamw(learning_rate),
         )
     )
 
@@ -153,7 +153,7 @@ class WorldModel(struct.PyTreeNode):
         tx=optax.chain(
             optax.zero_nans(),
             optax.clip_by_global_norm(max_grad_norm),
-            optax.adam(learning_rate),
+            optax.adamw(learning_rate),
         )
     )
     target_value_model = TrainState.create(
@@ -174,7 +174,7 @@ class WorldModel(struct.PyTreeNode):
           tx=optax.chain(
               optax.zero_nans(),
               optax.clip_by_global_norm(max_grad_norm),
-              optax.adam(learning_rate),
+              optax.adamw(learning_rate),
           )
       )
     else:
@@ -241,6 +241,7 @@ class WorldModel(struct.PyTreeNode):
         continue_model=continue_model,
         # Architecture
         latent_dim=latent_dim,
+        simnorm_dim=simnorm_dim,
         num_value_nets=num_value_nets,
         num_bins=num_bins,
         symlog_min=float(symlog_min),
@@ -250,15 +251,18 @@ class WorldModel(struct.PyTreeNode):
     )
 
   @jax.jit
-  def encode(self, obs: np.ndarray, params: Dict, key: PRNGKeyArray) -> jax.Array:
+  def encode(self, obs: PyTree, params: Dict, key: PRNGKeyArray) -> jax.Array:
     if self.symlog_obs:
       obs = jax.tree.map(lambda x: symlog(x), obs)
-    return self.encoder.apply_fn({'params': params}, obs, rngs={'dropout': key})
+    z = self.encoder.apply_fn({'params': params}, obs, rngs={'dropout': key})
+    return simnorm(z, simplex_dim=self.simnorm_dim) 
 
   @jax.jit
   def next(self, z: jax.Array, a: jax.Array, params: Dict) -> jax.Array:
-    z = jnp.concatenate([z, a], axis=-1)
-    return self.dynamics_model.apply_fn({'params': params}, z)
+    z = self.dynamics_model.apply_fn(
+        {'params': params}, jnp.concatenate([z, a], axis=-1)
+    )
+    return simnorm(z, simplex_dim=self.simnorm_dim)
 
   @jax.jit
   def reward(self, z: jax.Array, a: jax.Array, params: Dict
@@ -274,8 +278,7 @@ class WorldModel(struct.PyTreeNode):
   def sample_actions(self,
                      z: jax.Array,
                      params: Dict,
-                     min_log_std: float = -5,
-                     max_log_std: float = 1,
+                     std_scale: float = 1,
                      *,
                      key: PRNGKeyArray
                      ) -> Tuple[jax.Array, ...]:
@@ -284,9 +287,9 @@ class WorldModel(struct.PyTreeNode):
         self.policy_model.apply_fn({'params': params}, z), 2, axis=-1
     )
     mean = jnp.tanh(mean)
-    log_std = min_log_std + (max_log_std - min_log_std) * \
+    log_std = MIN_LOG_STD + (MAX_LOG_STD - MIN_LOG_STD) * \
         0.5 * (jnp.tanh(log_std) + 1)
-    std = jnp.exp(log_std)
+    std = std_scale * jnp.exp(log_std)
 
     # Sample action and compute logprobs
     dist = tfd.MultivariateNormalDiag(loc=mean, scale_diag=std)
