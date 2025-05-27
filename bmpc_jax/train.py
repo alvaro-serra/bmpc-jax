@@ -219,7 +219,7 @@ def train(cfg: dict):
             train=True,
             key=action_key
         )
-        expert_mean, expert_std = plan[0][..., 0, :], plan[1][..., 0, :]
+        expert_mean, expert_std = plan[2][..., 0, :], plan[3][..., 0, :]
         if log_this_step:
           writer.scalar('train/plan_mean', np.mean(plan[0]), global_step)
           writer.scalar('train/plan_std', np.mean(plan[1]), global_step)
@@ -306,8 +306,8 @@ def train(cfg: dict):
                 horizon=h,
                 key=reanalyze_key
             )
-            reanalyze_mean = reanalyzed_plan[0][..., 0, :]
-            reanalyze_std = reanalyzed_plan[1][..., 0, :]
+            reanalyze_mean = reanalyzed_plan[2][..., 0, :]
+            reanalyze_std = reanalyzed_plan[3][..., 0, :]
             # Update expert policy in buffer
             # Reshape for buffer: (T, B, A) -> (B, T, A)
             env_inds = batch_inds[0][:b, None]

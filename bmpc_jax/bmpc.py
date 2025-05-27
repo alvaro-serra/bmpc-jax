@@ -223,34 +223,20 @@ class BMPC(struct.PyTreeNode):
               score[..., None, None] *
               (elite_actions - mean[..., None, :, :])**2,
               axis=-3
-          )
+          ) + 1e-6
       ).clip(self.min_plan_std, self.max_plan_std)
 
-    # Select final action
-    key, gumbel_key = jax.random.split(key)
-    gumbels = jax.random.gumbel(gumbel_key, shape=elite_values.shape)
-    gumbel_scores = jnp.log(score) + gumbels
-    action_ind = jnp.argmax(gumbel_scores, axis=-1)
+    # Sample final action
+    if deterministic:  # Use best trajectory
+      action_ind = jnp.argmax(elite_values, axis=-1)
+    else:  # Sample from elites
+      key, final_mean_key = jax.random.split(key)
+      action_ind = jax.random.categorical(
+          final_mean_key, logits=jnp.log(score), shape=batch_shape
+      )
     action = jnp.take_along_axis(
         elite_actions, action_ind[..., None, None, None], axis=-3
     ).squeeze(-3)
-
-    if deterministic:
-      action_ind = jnp.argmax(elite_values, axis=-1)
-      action = jnp.take_along_axis(
-          elite_actions, action_ind[..., None, None, None], axis=-3
-      ).squeeze(-3)
-    else:
-      # Sample from elites
-      key, final_action_key = jax.random.split(key)
-      action_ind = jax.random.categorical(
-          final_action_key, logits=jnp.log(score), shape=batch_shape
-      )
-      action = jnp.take_along_axis(
-          elite_actions, action_ind[..., None, None, None], axis=-3
-      ).squeeze(-3)
-
-    # Compute final plan distribution
     if train:
       key, final_noise_key = jax.random.split(key)
       final_action = action[..., 0, :] + std[..., 0, :] * \
@@ -260,7 +246,20 @@ class BMPC(struct.PyTreeNode):
     else:
       final_action = action[..., 0, :]
 
-    return final_action.clip(-1, 1), (mean, std)
+    # Expert distribution centered about the best trajectory
+    expert_ind = jnp.argmax(elite_values, axis=-1)
+    expert_mean = jnp.take_along_axis(
+        elite_actions, expert_ind[..., None, None, None], axis=-3
+    ).squeeze(-3)
+    expert_std = jnp.sqrt(
+        jnp.sum(
+            score[..., None, None] *
+            (elite_actions - expert_mean[..., None, :, :])**2,
+            axis=-3
+        ) + 1e-6
+    )
+
+    return final_action.clip(-1, 1), (mean, std, expert_mean, expert_std)
 
   @partial(jax.jit, static_argnames=('horizon'))
   def estimate_value(self,
