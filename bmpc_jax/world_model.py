@@ -256,7 +256,7 @@ class WorldModel(struct.PyTreeNode):
     if self.symlog_obs:
       obs = jax.tree.map(lambda x: symlog(x), obs)
     z = self.encoder.apply_fn({'params': params}, obs, rngs={'dropout': key})
-    return simnorm(z, simplex_dim=self.simnorm_dim) 
+    return simnorm(z, simplex_dim=self.simnorm_dim)
 
   @jax.jit
   def next(self, z: jax.Array, a: jax.Array, params: Dict) -> jax.Array:
@@ -279,7 +279,8 @@ class WorldModel(struct.PyTreeNode):
   def sample_actions(self,
                      z: jax.Array,
                      params: Dict,
-                     std_scale: float = 1,
+                     std_scale: float = 1.0,
+                     std_bias: float = 0.0,
                      *,
                      key: PRNGKeyArray
                      ) -> Tuple[jax.Array, ...]:
@@ -290,7 +291,7 @@ class WorldModel(struct.PyTreeNode):
     mean = jnp.tanh(mean)
     log_std = MIN_LOG_STD + (MAX_LOG_STD - MIN_LOG_STD) * \
         0.5 * (jnp.tanh(log_std) + 1)
-    std = std_scale * jnp.exp(log_std)
+    std = std_scale * jnp.exp(log_std) + std_bias
 
     # Sample action and compute logprobs
     dist = tfd.MultivariateNormalDiag(loc=mean, scale_diag=std)
