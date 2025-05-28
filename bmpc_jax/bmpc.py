@@ -33,6 +33,7 @@ class BMPC(struct.PyTreeNode):
   max_plan_std: float
   temperature: float
   policy_std_scale: float
+  policy_std_bias: float
   # Optimization
   batch_size: int = struct.field(pytree_node=False)
   discount: float
@@ -57,6 +58,7 @@ class BMPC(struct.PyTreeNode):
              max_plan_std: float,
              temperature: float,
              policy_std_scale: float,
+             policy_std_bias: float,
              # Optimization
              discount: float,
              batch_size: int,
@@ -79,6 +81,7 @@ class BMPC(struct.PyTreeNode):
                max_plan_std=max_plan_std,
                temperature=temperature,
                policy_std_scale=policy_std_scale,
+               policy_std_bias=policy_std_bias,
                discount=discount,
                batch_size=batch_size,
                rho=rho,
@@ -164,6 +167,7 @@ class BMPC(struct.PyTreeNode):
                 z=z_t,
                 params=self.model.policy_model.params,
                 std_scale=self.policy_std_scale,
+                std_bias=self.policy_std_bias,
                 key=prior_noise_keys[t]
             )[0]
         )
@@ -209,9 +213,7 @@ class BMPC(struct.PyTreeNode):
       ).clip(-1, 1)
 
       # Compute elites
-      values = self.estimate_value(
-          z=z_t, actions=actions, horizon=horizon, key=value_keys[i]
-      )
+      values = self.estimate_value(z_t, actions, horizon, key=value_keys[i])
       elite_values, elite_inds = jax.lax.top_k(values, self.num_elites)
       elite_actions = jnp.take_along_axis(
           actions, elite_inds[..., None, None], axis=-3
@@ -232,9 +234,9 @@ class BMPC(struct.PyTreeNode):
     if deterministic:  # Use best trajectory
       action_ind = jnp.argmax(elite_values, axis=-1)
     else:  # Sample from elites
-      key, final_action_key = jax.random.split(key)
+      key, final_mean_key = jax.random.split(key)
       action_ind = jax.random.categorical(
-          final_action_key, logits=jnp.log(score), shape=batch_shape
+          final_mean_key, logits=jnp.log(score), shape=batch_shape
       )
     action = jnp.take_along_axis(
         elite_actions, action_ind[..., None, None, None], axis=-3
@@ -461,6 +463,7 @@ class BMPC(struct.PyTreeNode):
           z=z,
           params=self.model.policy_model.params,
           std_scale=self.policy_std_scale,
+          std_bias=self.policy_std_bias,
           key=action_keys[t]
       )[0]
       reward, _ = self.model.reward(z, action, self.model.reward_model.params)
