@@ -169,9 +169,9 @@ class BMPC(struct.PyTreeNode):
         )
         if t < horizon-1:  # Don't need for the last time step
           z_t = self.model.next(
-              z_t,
-              policy_actions[..., t, :],
-              self.model.dynamics_model.params
+              z=z_t,
+              a=policy_actions[..., t, :],
+              params=self.model.dynamics_model.params
           )
 
       actions = actions.at[..., :self.policy_prior_samples, :, :].set(
@@ -209,7 +209,9 @@ class BMPC(struct.PyTreeNode):
       ).clip(-1, 1)
 
       # Compute elites
-      values = self.estimate_value(z_t, actions, horizon, key=value_keys[i])
+      values = self.estimate_value(
+          z=z_t, actions=actions, horizon=horizon, key=value_keys[i]
+      )
       elite_values, elite_inds = jax.lax.top_k(values, self.num_elites)
       elite_actions = jnp.take_along_axis(
           actions, elite_inds[..., None, None], axis=-3
@@ -230,9 +232,9 @@ class BMPC(struct.PyTreeNode):
     if deterministic:  # Use best trajectory
       action_ind = jnp.argmax(elite_values, axis=-1)
     else:  # Sample from elites
-      key, final_mean_key = jax.random.split(key)
+      key, final_action_key = jax.random.split(key)
       action_ind = jax.random.categorical(
-          final_mean_key, logits=jnp.log(score), shape=batch_shape
+          final_action_key, logits=jnp.log(score), shape=batch_shape
       )
     action = jnp.take_along_axis(
         elite_actions, action_ind[..., None, None, None], axis=-3
