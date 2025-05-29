@@ -21,6 +21,7 @@ from bmpc_jax.world_model import WorldModel
 class BMPC(struct.PyTreeNode):
   model: WorldModel
   kl_scale: jax.Array
+  value_scale: jax.Array
 
   # Planning
   mpc: bool
@@ -32,8 +33,6 @@ class BMPC(struct.PyTreeNode):
   min_plan_std: float
   max_plan_std: float
   temperature: float
-  policy_std_scale: float
-  policy_std_bias: float
   # Optimization
   batch_size: int = struct.field(pytree_node=False)
   discount: float
@@ -57,8 +56,6 @@ class BMPC(struct.PyTreeNode):
              min_plan_std: float,
              max_plan_std: float,
              temperature: float,
-             policy_std_scale: float,
-             policy_std_bias: float,
              # Optimization
              discount: float,
              batch_size: int,
@@ -80,8 +77,6 @@ class BMPC(struct.PyTreeNode):
                min_plan_std=min_plan_std,
                max_plan_std=max_plan_std,
                temperature=temperature,
-               policy_std_scale=policy_std_scale,
-               policy_std_bias=policy_std_bias,
                discount=discount,
                batch_size=batch_size,
                rho=rho,
@@ -91,6 +86,7 @@ class BMPC(struct.PyTreeNode):
                continue_coef=continue_coef,
                tau=tau,
                kl_scale=jnp.array([1.0]),
+               value_scale=jnp.array([1.0])
                )
 
   def act(self,
@@ -166,8 +162,6 @@ class BMPC(struct.PyTreeNode):
             self.model.sample_actions(
                 z=z_t,
                 params=self.model.policy_model.params,
-                std_scale=self.policy_std_scale,
-                std_bias=self.policy_std_bias,
                 key=prior_noise_keys[t]
             )[0]
         )
@@ -213,7 +207,9 @@ class BMPC(struct.PyTreeNode):
       ).clip(-1, 1)
 
       # Compute elites
-      values = self.estimate_value(z_t, actions, horizon, key=value_keys[i])
+      values = self.estimate_value(
+          z=z_t, actions=actions, horizon=horizon, key=value_keys[i]
+      )
       elite_values, elite_inds = jax.lax.top_k(values, self.num_elites)
       elite_actions = jnp.take_along_axis(
           actions, elite_inds[..., None, None], axis=-3
@@ -234,9 +230,9 @@ class BMPC(struct.PyTreeNode):
     if deterministic:  # Use best trajectory
       action_ind = jnp.argmax(elite_values, axis=-1)
     else:  # Sample from elites
-      key, final_mean_key = jax.random.split(key)
+      key, final_action_key = jax.random.split(key)
       action_ind = jax.random.categorical(
-          final_mean_key, logits=jnp.log(score), shape=batch_shape
+          final_action_key, logits=jnp.log(score), shape=batch_shape
       )
     action = jnp.take_along_axis(
         elite_actions, action_ind[..., None, None, None], axis=-3
@@ -462,8 +458,6 @@ class BMPC(struct.PyTreeNode):
       action = self.model.sample_actions(
           z=z,
           params=self.model.policy_model.params,
-          std_scale=self.policy_std_scale,
-          std_bias=self.policy_std_bias,
           key=action_keys[t]
       )[0]
       reward, _ = self.model.reward(z, action, self.model.reward_model.params)
@@ -503,28 +497,51 @@ class BMPC(struct.PyTreeNode):
                     key: PRNGKeyArray
                     ):
     def policy_loss_fn(actor_params: flax.core.FrozenDict):
-      _, mean, log_std, log_probs = self.model.sample_actions(
+      policy_key, value_key = jax.random.split(key, 2)
+      actions, mean, log_std, log_probs = self.model.sample_actions(
           z=zs,
           params=actor_params,
-          key=key
+          key=policy_key
       )
 
-      # Compute KL divergence between policy and expert
+      # Q-values
+      reward, _ = self.model.reward(
+          z=zs, a=actions, params=self.model.reward_model.params
+      )
+      next_z = self.model.next(
+          z=zs, a=actions, params=self.model.dynamics_model.params
+      )
+      Vs, _ = self.model.V(
+          next_z, self.model.value_model.params, key=value_key
+      )
+      V = Vs.mean(axis=0)
+      Q = reward + self.discount * V
+
+      # KL divergence between policy and expert
       action_dist = tfd.MultivariateNormalDiag(mean, jnp.exp(log_std))
       expert_dist = tfd.MultivariateNormalDiag(expert_mean, expert_std)
       kl_div = tfd.kl_divergence(action_dist, expert_dist)
       kl_scale = percentile_normalization(
           kl_div[0], self.kl_scale
       ).clip(1, None)
+      value_scale = percentile_normalization(
+          Q[0], self.value_scale
+      ).clip(1, None)
 
       policy_loss = jnp.mean(
-          self.rho**jnp.arange(self.horizon)[:, None] * kl_div / sg(kl_scale),
+          self.rho**jnp.arange(self.horizon)[:, None] *
+          (
+              kl_div / sg(kl_scale)
+              - Q / sg(value_scale)
+              + 1e-4 * log_probs
+          ),
           where=~finished
       )
 
       return policy_loss, {
           'policy_loss': policy_loss,
           'kl_scale': kl_scale,
+          'value_scale': value_scale,
           'policy_entropy': -log_probs.mean(),
           'policy_log_std': log_std.mean(),
       }
@@ -536,5 +553,6 @@ class BMPC(struct.PyTreeNode):
     new_agent = self.replace(
         model=self.model.replace(policy_model=new_policy),
         kl_scale=policy_info['kl_scale'],
+        value_scale=policy_info['value_scale']
     )
     return new_agent, policy_info
