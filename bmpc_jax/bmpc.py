@@ -32,8 +32,6 @@ class BMPC(struct.PyTreeNode):
   min_plan_std: float
   max_plan_std: float
   temperature: float
-  policy_std_scale: float
-  policy_std_bias: float
   # Optimization
   batch_size: int = struct.field(pytree_node=False)
   discount: float
@@ -57,8 +55,6 @@ class BMPC(struct.PyTreeNode):
              min_plan_std: float,
              max_plan_std: float,
              temperature: float,
-             policy_std_scale: float,
-             policy_std_bias: float,
              # Optimization
              discount: float,
              batch_size: int,
@@ -80,8 +76,6 @@ class BMPC(struct.PyTreeNode):
                min_plan_std=min_plan_std,
                max_plan_std=max_plan_std,
                temperature=temperature,
-               policy_std_scale=policy_std_scale,
-               policy_std_bias=policy_std_bias,
                discount=discount,
                batch_size=batch_size,
                rho=rho,
@@ -166,8 +160,6 @@ class BMPC(struct.PyTreeNode):
             self.model.sample_actions(
                 z=z_t,
                 params=self.model.policy_model.params,
-                std_scale=self.policy_std_scale,
-                std_bias=self.policy_std_bias,
                 key=prior_noise_keys[t]
             )[0]
         )
@@ -462,8 +454,6 @@ class BMPC(struct.PyTreeNode):
       action = self.model.sample_actions(
           z=z,
           params=self.model.policy_model.params,
-          std_scale=self.policy_std_scale,
-          std_bias=self.policy_std_bias,
           key=action_keys[t]
       )[0]
       reward, _ = self.model.reward(z, action, self.model.reward_model.params)
