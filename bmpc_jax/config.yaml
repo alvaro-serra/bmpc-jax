@@ -55,10 +55,10 @@ tdmpc2:
   batch_size: 256
   discount: 0.99
   rho: 0.5
-  consistency_coef: 10
-  reward_coef: 0.1
-  value_coef: 0.1
-  continue_coef: 1.0
+  consistency_loss_scale: 20
+  reward_loss_scale: 0.1
+  value_loss_scale: 0.1
+  continue_loss_scale: 1.0
   tau: 0.01
 
 bmpc:
