@@ -23,7 +23,6 @@ class BMPC(struct.PyTreeNode):
   kl_scale: jax.Array
 
   # Planning
-  mpc: bool
   horizon: int = struct.field(pytree_node=False)
   mppi_iterations: int = struct.field(pytree_node=False)
   population_size: int = struct.field(pytree_node=False)
@@ -47,7 +46,6 @@ class BMPC(struct.PyTreeNode):
   def create(cls,
              world_model: WorldModel,
              # Planning
-             mpc: bool,
              horizon: int,
              mppi_iterations: int,
              population_size: int,
@@ -68,7 +66,6 @@ class BMPC(struct.PyTreeNode):
              ) -> BMPC:
 
     return cls(model=world_model,
-               mpc=mpc,
                horizon=horizon,
                mppi_iterations=mppi_iterations,
                population_size=population_size,
@@ -89,8 +86,10 @@ class BMPC(struct.PyTreeNode):
                kl_scale=jnp.array([1.0]),
                )
 
+  @partial(jax.jit, static_argnames=('mpc', 'deterministic', 'train'))
   def act(self,
           obs: PyTree,
+          mpc: bool = True,
           prev_plan: Optional[Tuple[jax.Array, jax.Array]] = None,
           deterministic: bool = False,
           train: bool = False,
@@ -104,7 +103,7 @@ class BMPC(struct.PyTreeNode):
         key=encoder_key
     )
 
-    if self.mpc:
+    if mpc:
       action, plan, expert_dist = self.plan(
           z=z,
           horizon=self.horizon,
@@ -445,6 +444,7 @@ class BMPC(struct.PyTreeNode):
     )
     return new_agent, info
 
+  @partial(jax.jit, static_argnames=('num_td_steps',))
   def td_target(self,
                 z: jax.Array,
                 num_td_steps: int = 1,
