@@ -42,7 +42,6 @@ world_model:
 
 tdmpc2:
   # Planning
-  mpc: True
   horizon: 3
   mppi_iterations: 6
   population_size: 512

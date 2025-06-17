@@ -214,7 +214,7 @@ def train(cfg: dict):
         rng, action_key = jax.random.split(rng)
         action, plan, (expert_mean, expert_std) = agent.act(
             obs=observation,
-            mpc=tdmpc_config.mpc,
+            mpc=True,
             prev_plan=plan,
             deterministic=False,
             train=True,
