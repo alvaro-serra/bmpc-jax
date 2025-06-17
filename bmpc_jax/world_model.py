@@ -215,7 +215,7 @@ class WorldModel(struct.PyTreeNode):
       print(
           value_ensemble.tabulate(
               {'params': jax.random.key(0), 'dropout': jax.random.key(0)},
-              jnp.ones(latent_dim + action_dim),
+              jnp.ones(latent_dim),
               compute_flops=True
           )
       )
