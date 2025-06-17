@@ -212,14 +212,14 @@ def train(cfg: dict):
         expert_mean, expert_std = np.zeros_like(action), np.ones_like(action)
       else:
         rng, action_key = jax.random.split(rng)
-        action, plan = agent.act(
+        action, plan, (expert_mean, expert_std) = agent.act(
             obs=observation,
             prev_plan=plan,
             deterministic=False,
             train=True,
             key=action_key
         )
-        expert_mean, expert_std = plan[2][..., 0, :], plan[3][..., 0, :]
+        action = np.array(action)
         if log_this_step:
           writer.scalar('train/plan_mean', np.mean(plan[0]), global_step)
           writer.scalar('train/plan_std', np.mean(plan[1]), global_step)
@@ -301,13 +301,11 @@ def train(cfg: dict):
             rng, reanalyze_key = jax.random.split(rng)
             b = bmpc_config.reanalyze_batch_size
             h = bmpc_config.reanalyze_horizon
-            _, reanalyzed_plan = agent.plan(
+            _, _, (reanalyze_mean, reanalyze_std) = agent.plan(
                 z=encoder_zs[:, :b, :],
                 horizon=h,
                 key=reanalyze_key
             )
-            reanalyze_mean = reanalyzed_plan[2][..., 0, :]
-            reanalyze_std = reanalyzed_plan[3][..., 0, :]
             # Update expert policy in buffer
             # Reshape for buffer: (T, B, A) -> (B, T, A)
             env_inds = batch_inds[0][:b, None]

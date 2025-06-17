@@ -105,7 +105,7 @@ class BMPC(struct.PyTreeNode):
     )
 
     if self.mpc:
-      action, plan = self.plan(
+      action, plan, expert_dist = self.plan(
           z=z,
           horizon=self.horizon,
           prev_plan=prev_plan,
@@ -119,9 +119,9 @@ class BMPC(struct.PyTreeNode):
           params=self.model.policy_model.params,
           key=action_key
       )[0]
-      plan = None
+      plan, expert_dist = None, None
 
-    return np.array(action), plan
+    return action, plan, expert_dist
 
   @partial(jax.jit, static_argnames=('horizon', 'deterministic', 'train'))
   def plan(self,
@@ -244,20 +244,9 @@ class BMPC(struct.PyTreeNode):
     else:
       final_action = action[..., 0, :]
 
-    # Expert distribution centered about the best trajectory
-    expert_ind = jnp.argmax(elite_values, axis=-1)
-    expert_mean = jnp.take_along_axis(
-        elite_actions, expert_ind[..., None, None, None], axis=-3
-    ).squeeze(-3)
-    expert_std = jnp.sqrt(
-        jnp.sum(
-            score[..., None, None] *
-            (elite_actions - expert_mean[..., None, :, :])**2,
-            axis=-3
-        ) + 1e-6
-    )
+    expert_mean, expert_std = mean[..., 0, :], std[..., 0, :]
 
-    return final_action.clip(-1, 1), (mean, std, expert_mean, expert_std)
+    return final_action.clip(-1, 1), (mean, std), (expert_mean, expert_std)
 
   @partial(jax.jit, static_argnames=('horizon'))
   def estimate_value(self,
