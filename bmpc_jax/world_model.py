@@ -275,10 +275,11 @@ class WorldModel(struct.PyTreeNode):
     )
     return reward, logits
 
-  @jax.jit
+  @partial(jax.jit, static_argnames=('deterministic',))
   def sample_actions(self,
                      z: jax.Array,
                      params: Dict,
+                     deterministic: bool = False,
                      *,
                      key: PRNGKeyArray
                      ) -> Tuple[jax.Array, ...]:
@@ -293,7 +294,10 @@ class WorldModel(struct.PyTreeNode):
 
     # Sample action and compute logprobs
     dist = tfd.MultivariateNormalDiag(loc=mean, scale_diag=std)
-    action = dist.sample(seed=key)
+    if deterministic:
+      action = mean
+    else:
+      action = dist.sample(seed=key)
     log_probs = dist.log_prob(action)
 
     return action.clip(-1, 1), mean, log_std, log_probs

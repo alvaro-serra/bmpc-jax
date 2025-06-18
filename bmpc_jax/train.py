@@ -221,9 +221,6 @@ def train(cfg: dict):
             key=action_key
         )
         action = np.array(action)
-        if log_this_step:
-          writer.scalar('train/plan_mean', np.mean(plan[0]), global_step)
-          writer.scalar('train/plan_std', np.mean(plan[1]), global_step)
 
       next_observation, reward, terminated, truncated, info = env.step(action)
 
@@ -305,7 +302,7 @@ def train(cfg: dict):
             _, _, (reanalyze_mean, reanalyze_std) = agent.plan(
                 z=encoder_zs[:, :b, :],
                 horizon=h,
-                deterministic=True,
+                deterministic=False,
                 train=False,
                 key=reanalyze_key,
             )

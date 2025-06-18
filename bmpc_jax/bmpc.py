@@ -113,12 +113,14 @@ class BMPC(struct.PyTreeNode):
           key=action_key
       )
     else:
-      action = self.model.sample_actions(
+      action, mean, log_std, _ = self.model.sample_actions(
           z=z,
+          deterministic=deterministic,
           params=self.model.policy_model.params,
           key=action_key
-      )[0]
-      plan, expert_dist = None, None
+      )
+      plan = None
+      expert_dist = (mean, jnp.exp(log_std))
 
     return action, plan, expert_dist
 
