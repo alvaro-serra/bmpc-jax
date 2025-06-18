@@ -305,7 +305,9 @@ def train(cfg: dict):
             _, _, (reanalyze_mean, reanalyze_std) = agent.plan(
                 z=encoder_zs[:, :b, :],
                 horizon=h,
-                key=reanalyze_key
+                deterministic=True,
+                train=False,
+                key=reanalyze_key,
             )
             # Update expert policy in buffer
             # Reshape for buffer: (T, B, A) -> (B, T, A)

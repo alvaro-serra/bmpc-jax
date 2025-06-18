@@ -47,7 +47,7 @@ tdmpc2:
   population_size: 512
   policy_prior_samples: 24
   num_elites: 64
-  min_plan_std: 0
+  min_plan_std: 0.05
   max_plan_std: 2
   temperature: 0.5
   # Optimization
