@@ -162,6 +162,7 @@ class BMPC(struct.PyTreeNode):
         policy_actions = policy_actions.at[..., t, :].set(
             self.model.sample_actions(
                 z=z_t,
+                deterministic=False,
                 params=self.model.policy_model.params,
                 key=prior_noise_keys[t]
             )[0]
@@ -458,6 +459,7 @@ class BMPC(struct.PyTreeNode):
     for t in range(num_td_steps):
       action = self.model.sample_actions(
           z=z,
+          deterministic=False,
           params=self.model.policy_model.params,
           key=action_keys[t]
       )[0]
@@ -495,18 +497,24 @@ class BMPC(struct.PyTreeNode):
                     expert_mean: jax.Array,
                     expert_std: jax.Array,
                     finished: jax.Array,
+                    expert_std_scale: float = 1.0,
+                    expert_std_bias: float = 0.0,
+                    *,
                     key: PRNGKeyArray
                     ):
     def policy_loss_fn(actor_params: flax.core.FrozenDict):
       _, mean, log_std, log_probs = self.model.sample_actions(
           z=zs,
+          deterministic=False,
           params=actor_params,
           key=key
       )
 
       # Compute KL divergence between policy and expert
       action_dist = tfd.MultivariateNormalDiag(mean, jnp.exp(log_std))
-      expert_dist = tfd.MultivariateNormalDiag(expert_mean, expert_std)
+      expert_dist = tfd.MultivariateNormalDiag(
+          expert_mean, expert_std_scale*expert_std + expert_std_bias
+      )
       kl_div = tfd.kl_divergence(action_dist, expert_dist)
       kl_scale = percentile_normalization(
           kl_div[0], self.kl_scale

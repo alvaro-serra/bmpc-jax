@@ -47,7 +47,7 @@ tdmpc2:
   population_size: 512
   policy_prior_samples: 24
   num_elites: 64
-  min_plan_std: 0.05
+  min_plan_std: 0
   max_plan_std: 2
   temperature: 0.5
   # Optimization
@@ -64,3 +64,6 @@ bmpc:
   reanalyze_interval: 10
   reanalyze_batch_size: 20
   reanalyze_horizon: 3
+  init_std_scale: 1.0
+  init_std_bias: 0.1
+

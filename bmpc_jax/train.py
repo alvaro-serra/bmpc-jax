@@ -320,11 +320,21 @@ def train(cfg: dict):
           # Update policy with reanalyzed samples
           if not pretrain:
             rng, policy_key = jax.random.split(rng)
+            std_scale = np.interp(
+                global_step,
+                (0, cfg.max_steps),
+                (bmpc_config.init_std_scale, 1)
+            )
+            std_bias = np.interp(
+                global_step, (0, cfg.max_steps), (bmpc_config.init_std_bias, 0)
+            )
             agent, policy_info = agent.update_policy(
                 zs=latent_zs,
                 expert_mean=batch['expert_mean'],
                 expert_std=batch['expert_std'],
                 finished=finished,
+                expert_std_scale=std_scale,
+                expert_std_bias=std_bias,
                 key=policy_key
             )
             train_info.update(policy_info)
