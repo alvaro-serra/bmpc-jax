@@ -50,6 +50,8 @@ tdmpc2:
   min_plan_std: 0
   max_plan_std: 2
   temperature: 0.5
+  min_policy_log_std: -5
+  max_policy_log_std: 1
   # Optimization
   batch_size: 256
   discount: 0.99
@@ -64,6 +66,4 @@ bmpc:
   reanalyze_interval: 10
   reanalyze_batch_size: 20
   reanalyze_horizon: 3
-  init_std_scale: 1.0
-  init_std_bias: 0.1
 

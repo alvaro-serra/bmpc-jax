@@ -16,10 +16,6 @@ from bmpc_jax.common.activations import mish, simnorm
 from bmpc_jax.common.util import symlog, two_hot_inv
 from bmpc_jax.networks import Ensemble, NormedLinear
 
-MIN_LOG_STD = -5
-MAX_LOG_STD = 1
-
-
 class WorldModel(struct.PyTreeNode):
   # Models
   encoder: TrainState
@@ -280,6 +276,8 @@ class WorldModel(struct.PyTreeNode):
                      z: jax.Array,
                      params: Dict,
                      deterministic: bool = False,
+                     min_log_std: float = -5,
+                     max_log_std: float = 1,
                      *,
                      key: PRNGKeyArray
                      ) -> Tuple[jax.Array, ...]:
@@ -288,7 +286,7 @@ class WorldModel(struct.PyTreeNode):
         self.policy_model.apply_fn({'params': params}, z), 2, axis=-1
     )
     mean = jnp.tanh(mean)
-    log_std = MIN_LOG_STD + (MAX_LOG_STD - MIN_LOG_STD) * \
+    log_std = min_log_std + (max_log_std - min_log_std) * \
         0.5 * (jnp.tanh(log_std) + 1)
     std = jnp.exp(log_std)
 
