@@ -25,7 +25,7 @@ class NormedLinear(nn.Module):
                  dtype=self.dtype,
                  param_dtype=self.param_dtype)(x)
 
-    x = nn.LayerNorm(dtype=self.dtype)(x)
+    x = nn.LayerNorm()(x)
     if self.activation is not None:
       x = self.activation(x)
 
