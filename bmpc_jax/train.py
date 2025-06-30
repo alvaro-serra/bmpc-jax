@@ -83,16 +83,21 @@ def train(cfg: dict):
   ##############################
   # Agent setup
   ##############################
-  dtype = jnp.dtype(model_config.dtype)
   rng, model_key, encoder_key = jax.random.split(rng, 3)
   encoder_module = nn.Sequential(
       [
           NormedLinear(
-              encoder_config.encoder_dim, activation=mish, dtype=dtype
+              embed_dim=encoder_config.encoder_dim,
+              activation=mish,
+              dtype=encoder_config.dtype
           )
           for _ in range(encoder_config.num_encoder_layers-1)
       ] + [
-          NormedLinear(model_config.latent_dim, activation=None, dtype=dtype)
+          NormedLinear(
+              embed_dim=model_config.latent_dim,
+              activation=None,
+              dtype=encoder_config.dtype
+          )
       ]
   )
 
@@ -236,7 +241,7 @@ def train(cfg: dict):
                 expert_mean=expert_mean,
                 expert_std=expert_std,
             ),
-            env_mask=~done
+            mask=~done
         )
       observation = next_observation
 
@@ -303,7 +308,7 @@ def train(cfg: dict):
                 z=encoder_zs[:, :b, :],
                 horizon=h,
                 deterministic=False,
-                train=False,
+                train=True,
                 key=reanalyze_key,
             )
             # Update expert policy in buffer

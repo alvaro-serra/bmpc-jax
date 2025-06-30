@@ -16,6 +16,7 @@ from bmpc_jax.common.activations import mish, simnorm
 from bmpc_jax.common.util import symlog, two_hot_inv
 from bmpc_jax.networks import Ensemble, NormedLinear
 
+
 class WorldModel(struct.PyTreeNode):
   # Models
   encoder: TrainState
@@ -251,25 +252,58 @@ class WorldModel(struct.PyTreeNode):
   def encode(self, obs: PyTree, params: Dict, key: PRNGKeyArray) -> jax.Array:
     if self.symlog_obs:
       obs = jax.tree.map(lambda x: symlog(x), obs)
-    z = self.encoder.apply_fn({'params': params}, obs, rngs={'dropout': key})
+      
+    z = self.encoder.apply_fn(
+        {'params': params}, obs, rngs={'dropout': key}
+    ).astype(jnp.float32)
+
     return simnorm(z, simplex_dim=self.simnorm_dim)
 
   @jax.jit
   def next(self, z: jax.Array, a: jax.Array, params: Dict) -> jax.Array:
     z = self.dynamics_model.apply_fn(
         {'params': params}, jnp.concatenate([z, a], axis=-1)
-    )
+    ).astype(jnp.float32)
+
     return simnorm(z, simplex_dim=self.simnorm_dim)
 
   @jax.jit
-  def reward(self, z: jax.Array, a: jax.Array, params: Dict
+  def reward(self,
+             z: jax.Array,
+             a: jax.Array,
+             params: Dict,
              ) -> Tuple[jax.Array, jax.Array]:
     z = jnp.concatenate([z, a], axis=-1)
-    logits = self.reward_model.apply_fn({'params': params}, z)
+    logits = self.reward_model.apply_fn(
+        {'params': params}, z
+    ).astype(jnp.float32)
+
     reward = two_hot_inv(
-        logits, self.symlog_min, self.symlog_max, self.num_bins
+        x=logits,
+        min=self.symlog_min,
+        max=self.symlog_max,
+        num_bins=self.num_bins
     )
     return reward, logits
+
+  @jax.jit
+  def V(self,
+        z: jax.Array,
+        params: Dict,
+        key: PRNGKeyArray,
+        ) -> Tuple[jax.Array, jax.Array]:
+    logits = self.value_model.apply_fn(
+        {'params': params}, z, rngs={'dropout': key}
+    ).astype(jnp.float32)
+
+    V = two_hot_inv(
+        x=logits,
+        low=self.symlog_min,
+        high=self.symlog_max,
+        num_bins=self.num_bins,
+        apply_softmax=True,
+    )
+    return V, logits
 
   @partial(jax.jit, static_argnames=('deterministic',))
   def sample_actions(self,
@@ -283,7 +317,9 @@ class WorldModel(struct.PyTreeNode):
                      ) -> Tuple[jax.Array, ...]:
     # Chunk the policy model output to get mean and logstd
     mean, log_std = jnp.split(
-        self.policy_model.apply_fn({'params': params}, z), 2, axis=-1
+        self.policy_model.apply_fn({'params': params}, z).astype(jnp.float32),
+        2,
+        axis=-1
     )
     mean = jnp.tanh(mean)
     log_std = min_log_std + (max_log_std - min_log_std) * \
@@ -299,13 +335,3 @@ class WorldModel(struct.PyTreeNode):
     log_probs = dist.log_prob(action)
 
     return action.clip(-1, 1), mean, log_std, log_probs
-
-  @jax.jit
-  def V(self, z: jax.Array, params: Dict, key: PRNGKeyArray
-        ) -> Tuple[jax.Array, jax.Array]:
-    logits = self.value_model.apply_fn(
-        {'params': params}, z, rngs={'dropout': key}
-    )
-
-    V = two_hot_inv(logits, self.symlog_min, self.symlog_max, self.num_bins)
-    return V, logits
