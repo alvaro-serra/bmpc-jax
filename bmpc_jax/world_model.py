@@ -280,9 +280,10 @@ class WorldModel(struct.PyTreeNode):
 
     reward = two_hot_inv(
         x=logits,
-        min=self.symlog_min,
-        max=self.symlog_max,
-        num_bins=self.num_bins
+        low=self.symlog_min,
+        high=self.symlog_max,
+        num_bins=self.num_bins,
+        apply_softmax=True,
     )
     return reward, logits
 
