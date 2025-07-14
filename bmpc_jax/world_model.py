@@ -88,9 +88,7 @@ class WorldModel(struct.PyTreeNode):
     reward_module = nn.Sequential([
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
-        nn.Dense(
-            num_bins, kernel_init=nn.initializers.zeros, dtype=dtype
-        )
+        nn.Dense(num_bins, kernel_init=nn.initializers.zeros, dtype=dtype)
     ])
     reward_model = TrainState.create(
         apply_fn=reward_module.apply,
@@ -110,7 +108,7 @@ class WorldModel(struct.PyTreeNode):
         nn.Dense(
             2*action_dim,
             kernel_init=nn.initializers.truncated_normal(0.02),
-            dtype=dtype
+            dtype=dtype,
         )
     ])
     policy_model = TrainState.create(
@@ -138,9 +136,7 @@ class WorldModel(struct.PyTreeNode):
             dropout_rate=value_dropout,
             dtype=dtype
         ),
-        nn.Dense(
-            num_bins, kernel_init=nn.initializers.zeros, dtype=dtype
-        )
+        nn.Dense(num_bins, kernel_init=nn.initializers.zeros, dtype=dtype)
     ])
     value_ensemble = Ensemble(value_base, num=num_value_nets)
     value_model = TrainState.create(
@@ -252,7 +248,7 @@ class WorldModel(struct.PyTreeNode):
   def encode(self, obs: PyTree, params: Dict, key: PRNGKeyArray) -> jax.Array:
     if self.symlog_obs:
       obs = jax.tree.map(lambda x: symlog(x), obs)
-      
+
     z = self.encoder.apply_fn(
         {'params': params}, obs, rngs={'dropout': key}
     ).astype(jnp.float32)
@@ -261,8 +257,9 @@ class WorldModel(struct.PyTreeNode):
 
   @jax.jit
   def next(self, z: jax.Array, a: jax.Array, params: Dict) -> jax.Array:
+    za = jnp.concatenate([z, a], axis=-1)
     z = self.dynamics_model.apply_fn(
-        {'params': params}, jnp.concatenate([z, a], axis=-1)
+        {'params': params}, za
     ).astype(jnp.float32)
 
     return simnorm(z, simplex_dim=self.simnorm_dim)
@@ -273,9 +270,9 @@ class WorldModel(struct.PyTreeNode):
              a: jax.Array,
              params: Dict,
              ) -> Tuple[jax.Array, jax.Array]:
-    z = jnp.concatenate([z, a], axis=-1)
+    za = jnp.concatenate([z, a], axis=-1)
     logits = self.reward_model.apply_fn(
-        {'params': params}, z
+        {'params': params}, za
     ).astype(jnp.float32)
 
     reward = two_hot_inv(
@@ -318,9 +315,7 @@ class WorldModel(struct.PyTreeNode):
                      ) -> Tuple[jax.Array, ...]:
     # Chunk the policy model output to get mean and logstd
     mean, log_std = jnp.split(
-        self.policy_model.apply_fn({'params': params}, z).astype(jnp.float32),
-        2,
-        axis=-1
+        self.policy_model.apply_fn({'params': params}, z).astype(jnp.float32), 2, axis=-1
     )
     mean = jnp.tanh(mean)
     log_std = min_log_std + (max_log_std - min_log_std) * \

@@ -325,16 +325,11 @@ def train(cfg: dict):
           # Update policy with reanalyzed samples
           if not pretrain:
             rng, policy_key = jax.random.split(rng)
-            # Linearly anneal the log std range to prevent premature convergence
-            min_log_std = np.interp(
-                global_step,
-                [0, cfg.max_steps], [0.0, tdmpc_config.min_policy_log_std]
-            )
             agent, policy_info = agent.update_policy(
                 zs=latent_zs,
                 expert_mean=batch['expert_mean'],
                 expert_std=batch['expert_std'],
-                min_log_std=min_log_std,
+                min_expert_std=bmpc_config.min_expert_std,
                 finished=finished,
                 key=policy_key
             )

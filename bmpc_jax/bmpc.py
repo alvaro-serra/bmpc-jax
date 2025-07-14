@@ -31,8 +31,6 @@ class BMPC(struct.PyTreeNode):
   min_plan_std: float
   max_plan_std: float
   temperature: float
-  min_policy_log_std: float
-  max_policy_log_std: float
   # Optimization
   batch_size: int = struct.field(pytree_node=False)
   discount: float
@@ -55,8 +53,6 @@ class BMPC(struct.PyTreeNode):
              num_elites: int,
              min_plan_std: float,
              max_plan_std: float,
-             min_policy_log_std: float,
-             max_policy_log_std: float,
              temperature: float,
              # Optimization
              discount: float,
@@ -78,8 +74,6 @@ class BMPC(struct.PyTreeNode):
                min_plan_std=min_plan_std,
                max_plan_std=max_plan_std,
                temperature=temperature,
-               min_policy_log_std=min_policy_log_std,
-               max_policy_log_std=max_policy_log_std,
                discount=discount,
                batch_size=batch_size,
                rho=rho,
@@ -122,8 +116,6 @@ class BMPC(struct.PyTreeNode):
       action, mean, log_std, _ = self.model.sample_actions(
           z=z,
           deterministic=deterministic,
-          min_log_std=self.min_policy_log_std,
-          max_log_std=self.max_policy_log_std,
           params=self.model.policy_model.params,
           key=action_key
       )
@@ -171,8 +163,6 @@ class BMPC(struct.PyTreeNode):
             self.model.sample_actions(
                 z=z_t,
                 deterministic=False,
-                min_log_std=self.min_policy_log_std,
-                max_log_std=self.max_policy_log_std,
                 params=self.model.policy_model.params,
                 key=prior_noise_keys[t]
             )[0]
@@ -256,7 +246,8 @@ class BMPC(struct.PyTreeNode):
     else:
       final_action = action[..., 0, :]
 
-    expert_mean, expert_std = mean[..., 0, :], std[..., 0, :]
+    # Expert distribution
+    expert_mean, expert_std = action[..., 0, :], std[..., 0, :]
 
     return final_action.clip(-1, 1), (mean, std), (expert_mean, expert_std)
 
@@ -470,8 +461,6 @@ class BMPC(struct.PyTreeNode):
       action = self.model.sample_actions(
           z=z,
           deterministic=False,
-          min_log_std=self.min_policy_log_std,
-          max_log_std=self.max_policy_log_std,
           params=self.model.policy_model.params,
           key=action_keys[t]
       )[0]
@@ -509,25 +498,21 @@ class BMPC(struct.PyTreeNode):
                     expert_mean: jax.Array,
                     expert_std: jax.Array,
                     finished: jax.Array,
-                    min_log_std: float,
+                    min_expert_std: float,
                     key: PRNGKeyArray
                     ):
     def policy_loss_fn(actor_params: flax.core.FrozenDict):
       _, mean, log_std, log_probs = self.model.sample_actions(
           z=zs,
           deterministic=False,
-          min_log_std=min_log_std,
-          max_log_std=self.max_policy_log_std,
           params=actor_params,
           key=key
       )
 
       # Compute KL divergence between policy and expert
-      min_std = jnp.exp(min_log_std)
-      max_std = jnp.exp(self.max_policy_log_std)
       action_dist = tfd.MultivariateNormalDiag(mean, jnp.exp(log_std))
       expert_dist = tfd.MultivariateNormalDiag(
-          expert_mean, expert_std.clip(min_std, max_std)
+          expert_mean, expert_std.clip(min_expert_std, None),
       )
       kl_div = tfd.kl_divergence(action_dist, expert_dist)
       kl_scale = percentile_normalization(
@@ -556,6 +541,5 @@ class BMPC(struct.PyTreeNode):
     new_agent = self.replace(
         model=self.model.replace(policy_model=new_policy),
         kl_scale=policy_info['kl_scale'],
-        min_policy_log_std=min_log_std,
     )
     return new_agent, policy_info

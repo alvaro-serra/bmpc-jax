@@ -23,7 +23,7 @@ encoder:
   encoder_dim: 256
   num_encoder_layers: 2
   learning_rate: 1e-4
-  dtype: float32
+  dtype: bfloat16
   tabulate: False
 
 world_model:
@@ -38,7 +38,7 @@ world_model:
   learning_rate: 3e-4
   predict_continues: False
   max_grad_norm: 20
-  dtype: float32
+  dtype: bfloat16
   tabulate: False
 
 tdmpc2:
@@ -51,8 +51,6 @@ tdmpc2:
   min_plan_std: 0
   max_plan_std: 2
   temperature: 0.5
-  min_policy_log_std: -5
-  max_policy_log_std: 1
   # Optimization
   batch_size: 256
   discount: 0.99
@@ -67,4 +65,4 @@ bmpc:
   reanalyze_interval: 10
   reanalyze_batch_size: 20
   reanalyze_horizon: 3
-
+  min_expert_std: 0.10
