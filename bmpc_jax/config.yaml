@@ -65,4 +65,5 @@ bmpc:
   reanalyze_interval: 10
   reanalyze_batch_size: 20
   reanalyze_horizon: 3
-  min_expert_std: 0.10
+  min_expert_std: 0.05
+  init_std_scale: 2.0
