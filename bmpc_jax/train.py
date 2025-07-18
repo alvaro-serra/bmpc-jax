@@ -83,21 +83,16 @@ def train(cfg: dict):
   ##############################
   # Agent setup
   ##############################
+  dtype = jnp.dtype(model_config.dtype)
   rng, model_key, encoder_key = jax.random.split(rng, 3)
   encoder_module = nn.Sequential(
       [
           NormedLinear(
-              embed_dim=encoder_config.encoder_dim,
-              activation=mish,
-              dtype=encoder_config.dtype
+              encoder_config.encoder_dim, activation=mish, dtype=dtype
           )
           for _ in range(encoder_config.num_encoder_layers-1)
       ] + [
-          NormedLinear(
-              embed_dim=model_config.latent_dim,
-              activation=None,
-              dtype=encoder_config.dtype
-          )
+          NormedLinear(model_config.latent_dim, activation=None, dtype=dtype)
       ]
   )
 
@@ -122,7 +117,6 @@ def train(cfg: dict):
   )
   replay_buffer = SequentialReplayBuffer(
       capacity=cfg.buffer_size,
-      vectorized=True,
       num_envs=env_config.num_envs,
       seed=cfg.seed,
       dummy_input=dict(
@@ -217,15 +211,17 @@ def train(cfg: dict):
         expert_mean, expert_std = np.zeros_like(action), np.ones_like(action)
       else:
         rng, action_key = jax.random.split(rng)
-        action, plan, (expert_mean, expert_std) = agent.act(
+        action, plan = agent.act(
             obs=observation,
-            mpc=True,
             prev_plan=plan,
             deterministic=False,
             train=True,
             key=action_key
         )
-        action = np.array(action)
+        expert_mean, expert_std = plan[2][..., 0, :], plan[3][..., 0, :]
+        if log_this_step:
+          writer.scalar('train/plan_mean', np.mean(plan[0]), global_step)
+          writer.scalar('train/plan_std', np.mean(plan[1]), global_step)
 
       next_observation, reward, terminated, truncated, info = env.step(action)
 
@@ -304,13 +300,13 @@ def train(cfg: dict):
             rng, reanalyze_key = jax.random.split(rng)
             b = bmpc_config.reanalyze_batch_size
             h = bmpc_config.reanalyze_horizon
-            _, _, (reanalyze_mean, reanalyze_std) = agent.plan(
+            _, reanalyzed_plan = agent.plan(
                 z=encoder_zs[:, :b, :],
                 horizon=h,
-                deterministic=False,
-                train=True,
-                key=reanalyze_key,
+                key=reanalyze_key
             )
+            reanalyze_mean = reanalyzed_plan[2][..., 0, :]
+            reanalyze_std = reanalyzed_plan[3][..., 0, :]
             # Update expert policy in buffer
             # Reshape for buffer: (T, B, A) -> (B, T, A)
             env_inds = batch_inds[0][:b, None]
@@ -324,18 +320,11 @@ def train(cfg: dict):
 
           # Update policy with reanalyzed samples
           if not pretrain:
-            std_scale = np.interp(
-                global_step,
-                [0, cfg.max_steps],
-                [bmpc_config.init_std_scale, 1]
-            )
             rng, policy_key = jax.random.split(rng)
             agent, policy_info = agent.update_policy(
                 zs=latent_zs,
                 expert_mean=batch['expert_mean'],
-                expert_std=(
-                    std_scale * batch['expert_std']
-                ).clip(bmpc_config.min_expert_std, None),
+                expert_std=batch['expert_std'],
                 finished=finished,
                 key=policy_key
             )

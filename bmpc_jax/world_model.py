@@ -16,6 +16,9 @@ from bmpc_jax.common.activations import mish, simnorm
 from bmpc_jax.common.util import symlog, two_hot_inv
 from bmpc_jax.networks import Ensemble, NormedLinear
 
+MIN_LOG_STD = -5
+MAX_LOG_STD = 1
+
 
 class WorldModel(struct.PyTreeNode):
   # Models
@@ -88,7 +91,9 @@ class WorldModel(struct.PyTreeNode):
     reward_module = nn.Sequential([
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
         NormedLinear(latent_dim, activation=mish, dtype=dtype),
-        nn.Dense(num_bins, kernel_init=nn.initializers.zeros, dtype=dtype)
+        nn.Dense(
+            num_bins, kernel_init=nn.initializers.zeros, dtype=dtype
+        )
     ])
     reward_model = TrainState.create(
         apply_fn=reward_module.apply,
@@ -108,7 +113,7 @@ class WorldModel(struct.PyTreeNode):
         nn.Dense(
             2*action_dim,
             kernel_init=nn.initializers.truncated_normal(0.02),
-            dtype=dtype,
+            dtype=dtype
         )
     ])
     policy_model = TrainState.create(
@@ -136,7 +141,9 @@ class WorldModel(struct.PyTreeNode):
             dropout_rate=value_dropout,
             dtype=dtype
         ),
-        nn.Dense(num_bins, kernel_init=nn.initializers.zeros, dtype=dtype)
+        nn.Dense(
+            num_bins, kernel_init=nn.initializers.zeros, dtype=dtype
+        )
     ])
     value_ensemble = Ensemble(value_base, num=num_value_nets)
     value_model = TrainState.create(
@@ -208,7 +215,7 @@ class WorldModel(struct.PyTreeNode):
       print(
           value_ensemble.tabulate(
               {'params': jax.random.key(0), 'dropout': jax.random.key(0)},
-              jnp.ones(latent_dim),
+              jnp.ones(latent_dim + action_dim),
               compute_flops=True
           )
       )
@@ -248,86 +255,55 @@ class WorldModel(struct.PyTreeNode):
   def encode(self, obs: PyTree, params: Dict, key: PRNGKeyArray) -> jax.Array:
     if self.symlog_obs:
       obs = jax.tree.map(lambda x: symlog(x), obs)
-
-    z = self.encoder.apply_fn(
-        {'params': params}, obs, rngs={'dropout': key}
-    ).astype(jnp.float32)
-
+    z = self.encoder.apply_fn({'params': params}, obs, rngs={'dropout': key})
     return simnorm(z, simplex_dim=self.simnorm_dim)
 
   @jax.jit
   def next(self, z: jax.Array, a: jax.Array, params: Dict) -> jax.Array:
-    za = jnp.concatenate([z, a], axis=-1)
     z = self.dynamics_model.apply_fn(
-        {'params': params}, za
-    ).astype(jnp.float32)
-
+        {'params': params}, jnp.concatenate([z, a], axis=-1)
+    )
     return simnorm(z, simplex_dim=self.simnorm_dim)
 
   @jax.jit
-  def reward(self,
-             z: jax.Array,
-             a: jax.Array,
-             params: Dict,
+  def reward(self, z: jax.Array, a: jax.Array, params: Dict
              ) -> Tuple[jax.Array, jax.Array]:
-    za = jnp.concatenate([z, a], axis=-1)
-    logits = self.reward_model.apply_fn(
-        {'params': params}, za
-    ).astype(jnp.float32)
-
+    z = jnp.concatenate([z, a], axis=-1)
+    logits = self.reward_model.apply_fn({'params': params}, z)
     reward = two_hot_inv(
-        x=logits,
-        low=self.symlog_min,
-        high=self.symlog_max,
-        num_bins=self.num_bins,
-        apply_softmax=True,
+        logits, self.symlog_min, self.symlog_max, self.num_bins
     )
     return reward, logits
 
   @jax.jit
-  def V(self,
-        z: jax.Array,
-        params: Dict,
-        key: PRNGKeyArray,
-        ) -> Tuple[jax.Array, jax.Array]:
-    logits = self.value_model.apply_fn(
-        {'params': params}, z, rngs={'dropout': key}
-    ).astype(jnp.float32)
-
-    V = two_hot_inv(
-        x=logits,
-        low=self.symlog_min,
-        high=self.symlog_max,
-        num_bins=self.num_bins,
-        apply_softmax=True,
-    )
-    return V, logits
-
-  @partial(jax.jit, static_argnames=('deterministic',))
   def sample_actions(self,
                      z: jax.Array,
                      params: Dict,
-                     deterministic: bool = False,
-                     min_log_std: float = -5,
-                     max_log_std: float = 1,
                      *,
                      key: PRNGKeyArray
                      ) -> Tuple[jax.Array, ...]:
     # Chunk the policy model output to get mean and logstd
     mean, log_std = jnp.split(
-        self.policy_model.apply_fn({'params': params}, z).astype(jnp.float32), 2, axis=-1
+        self.policy_model.apply_fn({'params': params}, z), 2, axis=-1
     )
     mean = jnp.tanh(mean)
-    log_std = min_log_std + (max_log_std - min_log_std) * \
+    log_std = MIN_LOG_STD + (MAX_LOG_STD - MIN_LOG_STD) * \
         0.5 * (jnp.tanh(log_std) + 1)
     std = jnp.exp(log_std)
 
     # Sample action and compute logprobs
     dist = tfd.MultivariateNormalDiag(loc=mean, scale_diag=std)
-    if deterministic:
-      action = mean
-    else:
-      action = dist.sample(seed=key)
+    action = dist.sample(seed=key)
     log_probs = dist.log_prob(action)
 
     return action.clip(-1, 1), mean, log_std, log_probs
+
+  @jax.jit
+  def V(self, z: jax.Array, params: Dict, key: PRNGKeyArray
+        ) -> Tuple[jax.Array, jax.Array]:
+    logits = self.value_model.apply_fn(
+        {'params': params}, z, rngs={'dropout': key}
+    )
+
+    V = two_hot_inv(logits, self.symlog_min, self.symlog_max, self.num_bins)
+    return V, logits

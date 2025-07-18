@@ -1,8 +1,6 @@
-import gymnasium as gym
 import numpy as np
 from typing import *
 import jax
-from collections import deque
 from jaxtyping import PyTree
 
 
@@ -12,7 +10,6 @@ class SequentialReplayBuffer():
                capacity: int,
                dummy_input: Dict,
                num_envs: int = 1,
-               vectorized: bool = False,
                seed: Optional[int] = None,
                ):
     """
@@ -31,8 +28,6 @@ class SequentialReplayBuffer():
     seed : Optional[int], optional
         Seed for sampling, by default None
     """
-
-    self.vectorized = vectorized
     self.num_envs = num_envs
     self.capacity = capacity // num_envs
     self.size = np.zeros(num_envs, dtype=int)
@@ -56,23 +51,16 @@ class SequentialReplayBuffer():
     ----------
     data : PyTree
         Data to insert
-    mask : Optional[np.ndarray], optional
+    env_mask : Optional[np.ndarray], optional
         A boolean mask of size self.num_envs, which specifies which env buffers receive new data. If None, all envs receive data, by default None
     """
-    # Insert data for the specified envs
-    if mask is None:
-      mask = np.ones(self.num_envs, dtype=bool)
-
-    if self.vectorized:
-      def masked_set(x, y):
-        x[self.current_ind, mask] = y[mask]
-      jax.tree.map(masked_set, self.data, data)
-    else:
-      jax.tree.map(
-          lambda x, y: x.__setitem__(self.current_ind, y), self.data, data
-      )
+    jax.tree.map(
+        lambda x, y: masked_set(self.current_ind, x, y, mask), self.data, data
+    )
 
     # Update buffer state
+    if mask is None:
+      mask = np.ones(self.num_envs, dtype=bool)
     self.current_ind[mask] = (self.current_ind[mask] + 1) % self.capacity
     self.size[mask] = np.clip(self.size[mask] + 1, 0, self.capacity)
 
@@ -100,7 +88,7 @@ class SequentialReplayBuffer():
         The sampled batch. If return_inds is True, also returns the sampled indices in the batch/time dimensions
     """
 
-    if self.vectorized:
+    if self.num_envs > 1:
       batch, inds = self._sample_vectorized(batch_size, sequence_length)
     else:
       batch, inds = self._sample(batch_size, sequence_length)
@@ -169,3 +157,15 @@ class SequentialReplayBuffer():
     self.current_ind = state['current_ind']
     self.size = state['size']
     self.data = state['data']
+
+
+def masked_set(
+    i: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    mask: Optional[np.ndarray] = None
+) -> None:
+  if mask is not None:
+    x[i, mask] = y[mask]
+  else:
+    x[i] = y

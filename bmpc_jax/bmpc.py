@@ -23,6 +23,7 @@ class BMPC(struct.PyTreeNode):
   kl_scale: jax.Array
 
   # Planning
+  mpc: bool
   horizon: int = struct.field(pytree_node=False)
   mppi_iterations: int = struct.field(pytree_node=False)
   population_size: int = struct.field(pytree_node=False)
@@ -46,6 +47,7 @@ class BMPC(struct.PyTreeNode):
   def create(cls,
              world_model: WorldModel,
              # Planning
+             mpc: bool,
              horizon: int,
              mppi_iterations: int,
              population_size: int,
@@ -66,6 +68,7 @@ class BMPC(struct.PyTreeNode):
              ) -> BMPC:
 
     return cls(model=world_model,
+               mpc=mpc,
                horizon=horizon,
                mppi_iterations=mppi_iterations,
                population_size=population_size,
@@ -86,10 +89,8 @@ class BMPC(struct.PyTreeNode):
                kl_scale=jnp.array([1.0]),
                )
 
-  @partial(jax.jit, static_argnames=('mpc', 'deterministic', 'train'))
   def act(self,
           obs: PyTree,
-          mpc: bool = True,
           prev_plan: Optional[Tuple[jax.Array, jax.Array]] = None,
           deterministic: bool = False,
           train: bool = False,
@@ -103,8 +104,8 @@ class BMPC(struct.PyTreeNode):
         key=encoder_key
     )
 
-    if mpc:
-      action, plan, expert_dist = self.plan(
+    if self.mpc:
+      action, plan = self.plan(
           z=z,
           horizon=self.horizon,
           prev_plan=prev_plan,
@@ -113,16 +114,14 @@ class BMPC(struct.PyTreeNode):
           key=action_key
       )
     else:
-      action, mean, log_std, _ = self.model.sample_actions(
+      action = self.model.sample_actions(
           z=z,
-          deterministic=deterministic,
           params=self.model.policy_model.params,
           key=action_key
-      )
+      )[0]
       plan = None
-      expert_dist = (mean, jnp.exp(log_std))
 
-    return action, plan, expert_dist
+    return np.array(action), plan
 
   @partial(jax.jit, static_argnames=('horizon', 'deterministic', 'train'))
   def plan(self,
@@ -162,7 +161,6 @@ class BMPC(struct.PyTreeNode):
         policy_actions = policy_actions.at[..., t, :].set(
             self.model.sample_actions(
                 z=z_t,
-                deterministic=False,
                 params=self.model.policy_model.params,
                 key=prior_noise_keys[t]
             )[0]
@@ -246,10 +244,20 @@ class BMPC(struct.PyTreeNode):
     else:
       final_action = action[..., 0, :]
 
-    # Expert distribution
-    expert_mean, expert_std = mean[..., 0, :], std[..., 0, :]
+    # Expert distribution centered about the best trajectory
+    expert_ind = jnp.argmax(elite_values, axis=-1)
+    expert_mean = jnp.take_along_axis(
+        elite_actions, expert_ind[..., None, None, None], axis=-3
+    ).squeeze(-3)
+    expert_std = jnp.sqrt(
+        jnp.sum(
+            score[..., None, None] *
+            (elite_actions - expert_mean[..., None, :, :])**2,
+            axis=-3
+        ) + 1e-6
+    )
 
-    return final_action.clip(-1, 1), (mean, std), (expert_mean, expert_std)
+    return final_action.clip(-1, 1), (mean, std, expert_mean, expert_std)
 
   @partial(jax.jit, static_argnames=('horizon'))
   def estimate_value(self,
@@ -448,7 +456,6 @@ class BMPC(struct.PyTreeNode):
     )
     return new_agent, info
 
-  @partial(jax.jit, static_argnames=('num_td_steps',))
   def td_target(self,
                 z: jax.Array,
                 num_td_steps: int = 1,
@@ -460,7 +467,6 @@ class BMPC(struct.PyTreeNode):
     for t in range(num_td_steps):
       action = self.model.sample_actions(
           z=z,
-          deterministic=False,
           params=self.model.policy_model.params,
           key=action_keys[t]
       )[0]
@@ -503,7 +509,6 @@ class BMPC(struct.PyTreeNode):
     def policy_loss_fn(actor_params: flax.core.FrozenDict):
       _, mean, log_std, log_probs = self.model.sample_actions(
           z=zs,
-          deterministic=False,
           params=actor_params,
           key=key
       )
