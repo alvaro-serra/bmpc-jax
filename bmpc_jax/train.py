@@ -117,6 +117,7 @@ def train(cfg: dict):
   )
   replay_buffer = SequentialReplayBuffer(
       capacity=cfg.buffer_size,
+      vectorized=True,
       num_envs=env_config.num_envs,
       seed=cfg.seed,
       dummy_input=dict(
@@ -137,7 +138,7 @@ def train(cfg: dict):
       tx=optax.chain(
           optax.zero_nans(),
           optax.clip_by_global_norm(model_config.max_grad_norm),
-          optax.adam(encoder_config.learning_rate),
+          optax.adamw(encoder_config.learning_rate),
       )
   )
 
@@ -237,7 +238,7 @@ def train(cfg: dict):
                 expert_mean=expert_mean,
                 expert_std=expert_std,
             ),
-            mask=~done
+            env_mask=~done
         )
       observation = next_observation
 

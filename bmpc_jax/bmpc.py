@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import *
+from typing import Any, Dict, Optional, Tuple
 
 import flax
 import jax
@@ -36,11 +36,10 @@ class BMPC(struct.PyTreeNode):
   batch_size: int = struct.field(pytree_node=False)
   discount: float
   rho: float
-  rho_loss_scale: float
-  consistency_loss_scale: float
-  reward_loss_scale: float
-  value_loss_scale: float
-  continue_loss_scale: float
+  consistency_coef: float
+  reward_coef: float
+  value_coef: float
+  continue_coef: float
   tau: float
 
   @classmethod
@@ -60,10 +59,10 @@ class BMPC(struct.PyTreeNode):
              discount: float,
              batch_size: int,
              rho: float,
-             consistency_loss_scale: float,
-             reward_loss_scale: float,
-             value_loss_scale: float,
-             continue_loss_scale: float,
+             consistency_coef: float,
+             reward_coef: float,
+             value_coef: float,
+             continue_coef: float,
              tau: float
              ) -> BMPC:
 
@@ -80,11 +79,10 @@ class BMPC(struct.PyTreeNode):
                discount=discount,
                batch_size=batch_size,
                rho=rho,
-               rho_loss_scale=jnp.sum(rho**jnp.arange(horizon)),
-               consistency_loss_scale=consistency_loss_scale,
-               reward_loss_scale=reward_loss_scale,
-               value_loss_scale=value_loss_scale,
-               continue_loss_scale=continue_loss_scale,
+               consistency_coef=consistency_coef,
+               reward_coef=reward_coef,
+               value_coef=value_coef,
+               continue_coef=continue_coef,
                tau=tau,
                kl_scale=jnp.array([1.0]),
                )
@@ -325,7 +323,9 @@ class BMPC(struct.PyTreeNode):
       ###########################################################
       done = jnp.logical_or(terminated, truncated)
       finished = jnp.zeros((self.horizon, self.batch_size), dtype=bool)
-      latent_zs = jnp.zeros((self.horizon, self.batch_size, all_zs.shape[-1]))
+      latent_zs = jnp.zeros(
+          (self.horizon+1, self.batch_size, self.model.latent_dim)
+      )
       latent_zs = latent_zs.at[0].set(encoder_zs[0])
       consistency_loss = 0
       for t in range(self.horizon):
@@ -335,26 +335,20 @@ class BMPC(struct.PyTreeNode):
         if t < self.horizon-1:
           latent_zs = latent_zs.at[t+1].set(z)
           finished = finished.at[t+1].set(jnp.logical_or(finished[t], done[t]))
-      consistency_loss /= self.rho_loss_scale
+      consistency_loss /= self.horizon
 
       ###########################################################
       # Reward loss
       ###########################################################
       _, reward_logits = self.model.reward(latent_zs, actions, reward_params)
       reward_loss = jnp.mean(
-          jnp.sum(
-              self.rho**np.arange(self.horizon)[:, None] *
-              soft_crossentropy(
-                  pred_logits=reward_logits,
-                  target=rewards,
-                  low=self.model.symlog_min,
-                  high=self.model.symlog_max,
-                  num_bins=self.model.num_bins
-              ),
-              axis=-2,
-              where=~finished
-          )
-      ) / self.rho_loss_scale
+          self.rho**np.arange(self.horizon)[:, None] * soft_crossentropy(
+              reward_logits, rewards,
+              self.model.symlog_min,
+              self.model.symlog_max,
+              self.model.num_bins
+          ), where=~finished
+      )
 
       ###########################################################
       # Value loss
@@ -365,19 +359,13 @@ class BMPC(struct.PyTreeNode):
       _, V_logits = self.model.V(latent_zs, value_params, key=value_key)
       td_targets = self.td_target(z=encoder_zs, key=value_target_key)
       value_loss = jnp.mean(
-          jnp.sum(
-              self.rho**np.arange(self.horizon)[:, None] *
-              soft_crossentropy(
-                  pred_logits=V_logits,
-                  target=sg(td_targets),
-                  low=self.model.symlog_min,
-                  high=self.model.symlog_max,
-                  num_bins=self.model.num_bins
-              ),
-              axis=-2,
-              where=~finished
-          )
-      ) / self.rho_loss_scale
+          self.rho**np.arange(self.horizon)[:, None] * soft_crossentropy(
+              V_logits, sg(td_targets),
+              self.model.symlog_min,
+              self.model.symlog_max,
+              self.model.num_bins
+          ), where=~finished
+      )
 
       ###########################################################
       # Continue loss
@@ -393,10 +381,10 @@ class BMPC(struct.PyTreeNode):
         continue_loss = 0.0
 
       total_loss = (
-          self.consistency_loss_scale * consistency_loss +
-          self.reward_loss_scale * reward_loss +
-          self.value_loss_scale * value_loss +
-          self.continue_loss_scale * continue_loss
+          self.consistency_coef * consistency_loss +
+          self.reward_coef * reward_loss +
+          self.value_coef * value_loss +
+          self.continue_coef * continue_loss
       )
 
       return total_loss, {
@@ -522,13 +510,10 @@ class BMPC(struct.PyTreeNode):
       ).clip(1, None)
 
       policy_loss = jnp.mean(
-          jnp.sum(
-              self.rho**jnp.arange(self.horizon)[:, None] *
-              kl_div / sg(kl_scale),
-              axis=-2,
-              where=~finished
-          )
-      ) / self.rho_loss_scale
+          self.rho**jnp.arange(self.horizon)[:, None] * kl_div / sg(kl_scale),
+          where=~finished
+      )
+
       return policy_loss, {
           'policy_loss': policy_loss,
           'kl_scale': kl_scale,
