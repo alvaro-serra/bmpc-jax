@@ -117,7 +117,6 @@ def train(cfg: dict):
   )
   replay_buffer = SequentialReplayBuffer(
       capacity=cfg.buffer_size,
-      vectorized=True,
       num_envs=env_config.num_envs,
       seed=cfg.seed,
       dummy_input=dict(
@@ -238,7 +237,7 @@ def train(cfg: dict):
                 expert_mean=expert_mean,
                 expert_std=expert_std,
             ),
-            env_mask=~done
+            mask=~done
         )
       observation = next_observation
 
