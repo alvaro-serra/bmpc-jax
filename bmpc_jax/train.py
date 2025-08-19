@@ -20,11 +20,15 @@ from bmpc_jax import BMPC, WorldModel
 from bmpc_jax.common.activations import mish, simnorm
 from bmpc_jax.data import SequentialReplayBuffer
 from bmpc_jax.envs.dmcontrol import make_dmc_env
+from bmpc_jax.envs.humanoid import make_humanoid_env
 from bmpc_jax.networks import NormedLinear
+
+import wandb
 
 gpus = tf.config.experimental.list_physical_devices('GPU')
 for gpu in gpus:
   tf.config.experimental.set_memory_growth(gpu, True)
+
 
 
 @hydra.main(config_name='config', config_path='.', version_base=None)
@@ -34,13 +38,25 @@ def train(cfg: dict):
   model_config = cfg['world_model']
   tdmpc_config = cfg['tdmpc2']
   bmpc_config = cfg['bmpc']
+  wandb_config = cfg['wandb']
 
   ##############################
   # Logger setup
   ##############################
   output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
-  writer = tensorboard.SummaryWriter(os.path.join(output_dir, 'tensorboard'))
-  writer.hparams(cfg)
+  if wandb_config.log_tensorboard:
+    writer = tensorboard.SummaryWriter(os.path.join(output_dir, 'tensorboard'))
+    writer.hparams(cfg)
+  # Wandb TODO it acts as writer, use it parallely at the same time that we would be logging things with writer
+  if wandb_config.log_wandb:
+      wandb.init(
+          project=wandb_config.project,
+          notes="baseline",
+          tags=["PPO", "MPPI"],
+          config=dict(cfg),
+          name=None if wandb_config.name=="unflagged" else wandb_config.name,
+          # mode=config["WANDB_MODE"],
+      )
 
   ##############################
   # Environment setup
@@ -60,9 +76,14 @@ def train(cfg: dict):
     elif env_config.backend == "dmc":
       env = make_dmc_env(env_config.env_id, seed, env_config.dmc.obs_type)
       env = gym.wrappers.RecordEpisodeStatistics(env)
-      env = gym.wrappers.Autoreset(env)
+      env = gym.wrappers.AutoResetWrapper(env)
       env.action_space.seed(seed)
       env.observation_space.seed(seed)
+      return env
+    elif env_config.backend == "humanoid":
+      _env = make_humanoid_env(env_config.env_id,cfg)
+      env = gym.wrappers.RecordEpisodeStatistics(_env)
+      env = gym.wrappers.AutoResetWrapper(env)
       return env
     else:
       raise ValueError("Environment not supported:", env_config)
@@ -79,6 +100,15 @@ def train(cfg: dict):
   )
   np.random.seed(cfg.seed)
   rng = jax.random.PRNGKey(cfg.seed)
+
+  # SETUP VECTORIZED EVALUATE ENVIRONMENTS # TODO
+  if env_config.eval_env:
+    eval_env = vector_env_cls(
+      [
+        partial(make_env, env_config, seed)
+        for seed in range(cfg.seed, cfg.seed + env_config.num_envs)
+      ])
+    eval_interval_steps = cfg["max_steps"] // env_config.eval_points
 
   ##############################
   # Agent setup
@@ -194,7 +224,9 @@ def train(cfg: dict):
     # Training loop
     ##############################
     ep_count = np.zeros(env_config.num_envs, dtype=int)
+    eval_ep_count = np.zeros(env_config.num_envs, dtype=int)
     prev_logged_step = global_step
+    prev_eval_step = global_step
     observation, _ = env.reset(seed=cfg.seed)
 
     T = 500
@@ -220,9 +252,9 @@ def train(cfg: dict):
             key=action_key
         )
         expert_mean, expert_std = plan[2][..., 0, :], plan[3][..., 0, :]
-        if log_this_step:
-          writer.scalar('train/plan_mean', np.mean(plan[0]), global_step)
-          writer.scalar('train/plan_std', np.mean(plan[1]), global_step)
+        # if log_this_step:
+        #   writer.scalar('train/plan_mean', np.mean(plan[0]), global_step)
+        #   writer.scalar('train/plan_std', np.mean(plan[1]), global_step)
 
       next_observation, reward, terminated, truncated, info = env.step(action)
 
@@ -252,14 +284,20 @@ def train(cfg: dict):
           )
         for ienv in range(env_config.num_envs):
           if done[ienv]:
-            r = info['episode']['r'][ienv]
-            l = info['episode']['l'][ienv]
-            print(
-                f"Episode {ep_count[ienv]}: r = {r:.2f}, l = {l}"
-            )
-            writer.scalar(f'episode/return', r, global_step + ienv)
-            writer.scalar(f'episode/length', l, global_step + ienv)
+            if wandb_config.log_tensorboard:
+              r = info["final_info"][ienv]['final_info']['episode']['r']
+              l = info["final_info"][ienv]['final_info']['episode']['l']
+              print(
+                  f"Episode {ep_count[ienv]}: r = {r:.2f}, l = {l}"
+              )
+              writer.scalar(f'episode/return', r, global_step + ienv)
+              writer.scalar(f'episode/length', l, global_step + ienv)
             ep_count[ienv] += 1
+            wandb_log_dict = {"train/env_step": global_step + ienv,
+                              "train/episode_return": info["final_info"][ienv]['final_info']['episode']['r'],
+                              "train/episode_length": info["final_info"][ienv]['final_info']['episode']['l']
+                              }
+            if wandb_config.log_wandb: wandb.log(wandb_log_dict)
 
       if global_step >= seed_steps:
         if global_step == seed_steps:
@@ -276,6 +314,7 @@ def train(cfg: dict):
         if log_this_step:
           all_train_info = defaultdict(list)
           prev_logged_step = global_step
+          wandb_log_dict_train = {}
 
         for iupdate in range(num_updates):
           batch, batch_inds = replay_buffer.sample(
@@ -337,8 +376,14 @@ def train(cfg: dict):
 
         if log_this_step:
           for k, v in all_train_info.items():
-            writer.scalar(f'train/{k}_mean', np.mean(v), global_step)
-            writer.scalar(f'train/{k}_std', np.std(v), global_step)
+            if wandb_config.log_tensorboard:
+              writer.scalar(f'train/{k}_mean', np.mean(v), global_step)
+              writer.scalar(f'train/{k}_std', np.std(v), global_step)
+            wandb_log_dict_train[f'updates/{k}_mean'] = np.mean(v)
+            wandb_log_dict_train[f'updates/{k}_std'] = np.std(v)
+            wandb_log_dict_train[f'updates/global_step'] = global_step
+          if wandb_config.log_wandb: wandb.log(wandb_log_dict_train)
+
 
         mngr.save(
             global_step,
@@ -348,6 +393,58 @@ def train(cfg: dict):
                 buffer_state=ocp.args.StandardSave(replay_buffer.get_state()),
             ),
         )
+
+        eval_this_step = global_step >= prev_eval_step + eval_interval_steps
+
+        if eval_this_step:
+          prev_eval_step = global_step
+          # INIT LOGGER
+          wandb_log_dict_eval = {"eval/env_step": 0.,
+                                 "eval/episode_return": 0.,
+                                 "eval/episode_length": 0.
+                                 }
+          num_eval_episodes = 0.0
+          # INIT RNG
+          rng, eval_rng = jax.random.split(rng)
+          # INIT PLANNER
+          eval_plan = None
+          # INIT ENVIRONMENTS
+          eval_observation, _ = eval_env.reset(seed=cfg.seed)
+          # FOR EVERY TRAINING STEP
+          for eval_step in range(1005):
+            rng, eval_action_key = jax.random.split(rng)
+            eval_action, eval_plan = agent.act(
+              obs=eval_observation,
+              prev_plan=eval_plan,
+              deterministic=True,
+              train=False,
+              key=eval_action_key)
+
+            eval_next_observation, eval_reward, eval_terminated, eval_truncated, eval_info = eval_env.step(eval_action)
+            eval_observation = eval_next_observation
+
+            # Handle terminations/truncations
+            eval_done = np.logical_or(eval_terminated, eval_truncated)
+            if np.any(eval_done):
+              if eval_plan is not None:
+                eval_plan = (
+                  eval_plan[0].at[eval_done].set(0),
+                  eval_plan[1].at[eval_done].set(agent.max_plan_std)
+                )
+              for ienv in range(env_config.num_envs):
+                if eval_done[ienv]:
+                  eval_ep_count[ienv] += 1
+                  num_eval_episodes+=1
+                  wandb_log_dict_eval["eval/env_step"] += global_step
+                  wandb_log_dict_eval["eval/episode_length"] += info["final_info"][ienv]['final_info']['episode']['l'].astype(float)
+                  wandb_log_dict_eval["eval/episode_return"] += info["final_info"][ienv]['final_info']['episode']['r']
+          wandb_log_dict_eval["eval/env_step"] /= num_eval_episodes
+          wandb_log_dict_eval["eval/episode_length"] /= num_eval_episodes
+          wandb_log_dict_eval["eval/episode_return"] /= num_eval_episodes
+          if wandb_config.log_wandb: wandb.log(wandb_log_dict_eval)
+
+
+
 
       pbar.update(env_config.num_envs)
     pbar.close()
