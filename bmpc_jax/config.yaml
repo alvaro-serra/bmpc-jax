@@ -5,9 +5,9 @@ hydra:
     dir: outputs/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}
 
 seed: 0
-max_steps: 2_000_000
-buffer_size: 2_000_000
-save_interval_steps: 100_000
+max_steps: 1_000_005
+buffer_size: 1_000_000
+save_interval_steps: 100_000_000
 log_interval_steps: 10_000
 
 env:
@@ -16,6 +16,9 @@ env:
   num_envs: 4
   utd_ratio: 1.0
   asynchronous: True
+
+  eval_env: True
+  eval_points: 100
 
   dmc: { obs_type: state }
 
@@ -65,3 +68,9 @@ bmpc:
   reanalyze_interval: 10
   reanalyze_batch_size: 20
   reanalyze_horizon: 3
+
+wandb:
+  log_tensorboard: False
+  log_wandb: False
+  name: unflagged
+  project: dog-run
