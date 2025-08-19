@@ -436,8 +436,8 @@ def train(cfg: dict):
                   eval_ep_count[ienv] += 1
                   num_eval_episodes+=1
                   wandb_log_dict_eval["eval/env_step"] += global_step
-                  wandb_log_dict_eval["eval/episode_length"] += info["final_info"][ienv]['final_info']['episode']['l'].astype(float)
-                  wandb_log_dict_eval["eval/episode_return"] += info["final_info"][ienv]['final_info']['episode']['r']
+                  wandb_log_dict_eval["eval/episode_length"] += eval_info["final_info"][ienv]['final_info']['episode']['l'].astype(float)
+                  wandb_log_dict_eval["eval/episode_return"] += eval_info["final_info"][ienv]['final_info']['episode']['r']
           wandb_log_dict_eval["eval/env_step"] /= num_eval_episodes
           wandb_log_dict_eval["eval/episode_length"] /= num_eval_episodes
           wandb_log_dict_eval["eval/episode_return"] /= num_eval_episodes
