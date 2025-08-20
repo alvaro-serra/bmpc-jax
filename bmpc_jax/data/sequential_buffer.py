@@ -166,6 +166,9 @@ def masked_set(
     mask: Optional[np.ndarray] = None
 ) -> None:
   if mask is not None:
-    x[i, mask] = y[mask]
+    # x[i, mask] = y[mask]
+    row_indices = i[mask]
+    col_indices = np.where(mask)[0]
+    x[row_indices, col_indices] = y[mask]
   else:
     x[i] = y
