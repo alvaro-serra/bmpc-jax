@@ -140,7 +140,10 @@ class SequentialReplayBuffer():
       env_mask = np.ones(self.num_envs, dtype=bool)
 
     def masked_set(x, y):
-      x[self.current_ind][:,env_mask] = y[env_mask]
+      row_indices = self.current_ind[env_mask]
+      col_indices = np.where(env_mask)[0]
+      # x[self.current_ind,env_mask] = y[env_mask]
+      x[row_indices, col_indices] = y[env_mask]
     jax.tree.map(masked_set, self.data, data)
 
     # Update buffer state
