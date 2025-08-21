@@ -33,6 +33,6 @@ python bmpc_jax/train.py \
        env.env_id=${ENV_ID} \
        wandb.project=${ENV_ID} \
        wandb.log_wandb=True \
-       wandb.name=bmpc_repo \
+       wandb.name=bmpc_repo_main \
        seed=${SEED} \
        >"${ENV_ID}_s${SEED}.out" 2>&1
