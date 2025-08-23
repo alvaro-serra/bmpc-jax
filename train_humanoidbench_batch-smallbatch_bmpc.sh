@@ -6,10 +6,10 @@
 #SBATCH --time=1-0:00:00
 #SBATCH --partition=gpu-medium
 #SBATCH --constraint="A100.80G|A100.4g.40gb|A100.3g.40gb"
-#SBATCH --array=0-32               # 11 envs × 3 seeds → indices 0-32.  Update if you add more.
+#SBATCH --array=0-23               # 8 envs × 3 seeds → indices 0-32.  Update if you add more.
 
 # EXPERIMENT GRID
-ENV_LIST=(h1hand-walk-v0 h1hand-reach-v0 h1hand-crawl-v0 h1hand-maze-v0 h1hand-stand-v0
+ENV_LIST=(h1hand-maze-v0 h1hand-stand-v0
  h1hand-run-v0 h1hand-sit_simple-v0 h1hand-sit_hard-v0 h1hand-balance_hard-v0
  h1hand-slide-v0 h1hand-pole-v0)   # Extend this with as many envs as you like
 SEED_LIST=(0 1 2)                           # Exactly three seeds, change if needed
