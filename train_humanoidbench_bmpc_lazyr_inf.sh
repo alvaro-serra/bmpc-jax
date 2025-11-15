@@ -33,6 +33,6 @@ python bmpc_jax/train.py \
        bmpc.reanalyze_interval=10000000.0
        wandb.project=${ENV_ID} \
        wandb.log_wandb=True \
-       wandb.name=bmpc_repo_main \
+       wandb.name=bmpc_repo_main_lazyr_inf \
        seed=${SEED} \
        >"${ENV_ID}_s${SEED}.out" 2>&1
