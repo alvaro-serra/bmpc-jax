@@ -30,7 +30,7 @@ module load cuDNN/8.9.7.29-CUDA-12.3.2
 python bmpc_jax/train.py \
        env.backend=humanoid \
        env.env_id=${ENV_ID} \
-       bmpc.reanalyze_interval=10000000.0
+       bmpc.reanalyze_interval=10000000.0 \
        wandb.project=${ENV_ID} \
        wandb.log_wandb=True \
        wandb.name=bmpc_repo_main_lazyr_inf \
