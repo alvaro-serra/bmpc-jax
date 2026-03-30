@@ -4,10 +4,12 @@
 #SBATCH --time=2-0:00:00
 #SBATCH --gres=gpu:1                           # or: --gres=gpu:4g.40gb:1 for a MIG 40GB slice
 #SBATCH --cpus-per-gpu=4
-#SBATCH --array=0-20               # 7 envs × 3 seeds → indices 0-5.  Update if you add more.
+#SBATCH --array=0-41               # 14 envs × 3 seeds → indices 0-5.  Update if you add more.
 
 # EXPERIMENT GRID
-ENV_LIST=(dog-stand dog-trot dog-walk dog-run humanoid-stand humanoid-walk humanoid-run)   # Extend this with as many envs as you like
+ENV_LIST=(h1hand-walk-v0 h1hand-reach-v0 h1hand-hurdle-v0 h1hand-crawl-v0 h1hand-maze-v0 h1hand-stand-v0
+ h1hand-run-v0 h1hand-sit_simple-v0 h1hand-sit_hard-v0 h1hand-balance_simple-v0 h1hand-balance_hard-v0
+ h1hand-stair-v0 h1hand-slide-v0 h1hand-pole-v0)   # Extend this with as many envs as you like
 SEED_LIST=(3 4)                           # Exactly three seeds, change if needed
 NUM_SEEDS=${#SEED_LIST[@]}
 
@@ -20,12 +22,12 @@ SEED=${SEED_LIST[$SEED_INDEX]}
 ENV_BACKEND=${BACKEND[$ENV_ID]}
 
 # ENVIRONMENT SETUP
-#module load cuDNN/8.9.7.29-CUDA-12.3.2
+module load cuDNN/8.9.7.29-CUDA-12.3.2
 #export MUJOCO_GL=egl
 
 # LAUNCH TRAINING
 python bmpc_jax/train.py \
-       env.backend=dmc \
+       env.backend=humanoid \
        env.env_id=${ENV_ID} \
        wandb.project=${ENV_ID} \
        wandb.log_wandb=True \
